@@ -2,3 +2,21 @@ en:
   billing:
     nav:
       title: "Billing"
+    invoices:
+      title: "Invoices"
+      subtitle: "A read-only list of invoices."
+      empty: "No invoices to show."
+      number: "Invoice number"
+      customer: "Customer"
+      status: "Status"
+      total: "Total"
+      issued_on: "Issue date"
+      pagination: "Invoice pagination"
+      previous: "Previous"
+      next: "Next"
+      page: "Page"
+      statuses:
+        draft: "Draft"
+        issued: "Issued"
+        paid: "Paid"
+        void: "Void"
