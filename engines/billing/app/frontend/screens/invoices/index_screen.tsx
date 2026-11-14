@@ -1,6 +1,7 @@
 import { Link } from "@design_system/public";
 
-import { InvoicesList, type InvoiceRow } from "../../components/invoices/list";
+import { InvoicesIndexContainer } from "../../containers/invoices/index_container";
+import type { InvoiceRow } from "../../components/invoices/list";
 import { useBillingTranslation } from "../../i18n";
 
 type Capability = { allowed: boolean; reason: string | null };
@@ -13,13 +14,14 @@ type Pagination = {
   pageCount: number;
 };
 
-type Props = {
+export type InvoicesScreenProps = {
   items: InvoiceRow[];
   newHref: string;
   previousHref: string | null;
   nextHref: string | null;
   can: Record<string, Capability>;
   pagination: Pagination | null;
+  formToken: string;
 };
 
 export function InvoicesScreen({
@@ -29,7 +31,8 @@ export function InvoicesScreen({
   nextHref,
   can,
   pagination,
-}: Props) {
+  formToken,
+}: InvoicesScreenProps) {
   const t = useBillingTranslation();
 
   return (
@@ -48,7 +51,11 @@ export function InvoicesScreen({
           </Link>
         </p>
       ) : null}
-      <InvoicesList items={items} />
+      <InvoicesIndexContainer
+        items={items}
+        canDelete={can["invoice.delete"]?.allowed === true}
+        formToken={formToken}
+      />
       {pagination ? (
         <nav
           aria-label={t("invoices.pagination")}

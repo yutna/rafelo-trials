@@ -16,6 +16,7 @@ export default function InvoicesIndex(props: Record<string, unknown>) {
         {...page.data}
         can={page.can}
         pagination={page.pagination?.kind === "offset" ? page.pagination : null}
+        formToken={page.meta.formToken}
       />
     </>
   );

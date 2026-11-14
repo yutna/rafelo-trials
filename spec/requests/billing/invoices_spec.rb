@@ -5,6 +5,7 @@ RSpec.describe "Billing invoices", type: :request do
   let(:create_fixture_path) { Rails.root.join("engines/billing/spec/fixtures/upstream/invoices/create.json") }
   let(:read_headers) { auth_headers(grants: [ "billing:invoice:read" ]) }
   let(:write_headers) { auth_headers(grants: [ "billing:invoice:read", "billing:invoice:create" ]) }
+  let(:delete_headers) { auth_headers(grants: [ "billing:invoice:read", "billing:invoice:delete" ]) }
 
   def stub_invoices(payload)
     stub_request(:get, "http://localhost:4000/invoices")
@@ -15,6 +16,11 @@ RSpec.describe "Billing invoices", type: :request do
   def stub_create_invoice
     stub_request(:post, "http://localhost:4000/invoices")
       .to_return(status: 201, body: create_fixture_path.read, headers: { "Content-Type" => "application/json" })
+  end
+
+  def stub_delete_invoice(id = "inv_1", status: 204)
+    stub_request(:delete, "http://localhost:4000/invoices/#{id}")
+      .to_return(status: status, body: "")
   end
 
   def form_token(headers, path = "/en/billing/invoices/new")
@@ -46,7 +52,10 @@ RSpec.describe "Billing invoices", type: :request do
       "issuedOn" => "2026-11-12"
     )
     expect(invoice.dig("total", "minor")).to eq(1250)
+    expect(invoice["deleteHref"]).to eq("/en/billing/invoices/inv_1")
+    expect(page_body.dig("props", "meta", "formToken")).to be_present
     expect(page_body.dig("props", "can", "invoice.read", "allowed")).to be(true)
+    expect(page_body.dig("props", "can", "invoice.delete", "allowed")).to be(false)
   end
 
   it "sends the standard offset query and builds the pagination links in Rails" do
@@ -144,5 +153,55 @@ RSpec.describe "Billing invoices", type: :request do
 
     expect(response).to have_http_status(:forbidden)
     expect(a_request(:post, "http://localhost:4000/invoices")).not_to have_been_made
+  end
+
+  it "offers the delete control and its href only to a viewer with the invoice delete grant" do
+    stub_invoices(JSON.parse(fixture_path.read))
+
+    get "/en/billing/invoices", headers: delete_headers
+    expect(page_body.dig("props", "can", "invoice.delete", "allowed")).to be(true)
+    expect(page_body.dig("props", "data", "items", 0, "deleteHref")).to eq("/en/billing/invoices/inv_1")
+
+    get "/en/billing/invoices", headers: write_headers
+    expect(page_body.dig("props", "can", "invoice.delete", "allowed")).to be(false)
+  end
+
+  it "deletes an invoice through the gateway, returns to the list with 303, and replays without a second call" do
+    stub_invoices(JSON.parse(fixture_path.read))
+    get "/en/billing/invoices", headers: delete_headers
+    token = page_body.dig("props", "meta", "formToken")
+    stub_delete_invoice
+
+    delete "/en/billing/invoices/inv_1", params: { token: token }, headers: delete_headers
+
+    expect(response).to have_http_status(:see_other)
+    expect(response).to redirect_to("/en/billing/invoices")
+    expect(a_request(:delete, "http://localhost:4000/invoices/inv_1")).to have_been_made.once
+    expect(Rafelo::Core::IdempotencyKey.count).to eq(1)
+
+    delete "/en/billing/invoices/inv_1", params: { token: token }, headers: delete_headers
+
+    expect(response).to have_http_status(:see_other)
+    expect(response).to redirect_to("/en/billing/invoices")
+    expect(a_request(:delete, "http://localhost:4000/invoices/inv_1")).to have_been_made.once
+  end
+
+  it "treats an invoice the upstream already deleted as deleted" do
+    stub_invoices(JSON.parse(fixture_path.read))
+    get "/en/billing/invoices", headers: delete_headers
+    token = page_body.dig("props", "meta", "formToken")
+    stub_delete_invoice(status: 404)
+
+    delete "/en/billing/invoices/inv_1", params: { token: token }, headers: delete_headers
+
+    expect(response).to have_http_status(:see_other)
+    expect(response).to redirect_to("/en/billing/invoices")
+  end
+
+  it "denies a viewer without the invoice delete grant" do
+    delete "/en/billing/invoices/inv_1", params: { token: "unused" }, headers: read_headers
+
+    expect(response).to have_http_status(:forbidden)
+    expect(a_request(:delete, "http://localhost:4000/invoices/inv_1")).not_to have_been_made
   end
 end

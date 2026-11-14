@@ -8,6 +8,8 @@ module RafeloTrials
       def new? = permissions.allows?(RafeloTrials::Billing::Permissions::INVOICE_CREATE)
 
       def create? = new?
+
+      def destroy? = permissions.allows?(RafeloTrials::Billing::Permissions::INVOICE_DELETE)
     end
   end
 end
