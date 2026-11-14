@@ -14,6 +14,7 @@ const invoiceSchema = z.object({
 export const pageSchema = definePage({
   data: z.object({
     items: z.array(invoiceSchema),
+    newHref: z.string(),
     previousHref: z.string().nullable(),
     nextHref: z.string().nullable(),
   }),
@@ -25,5 +26,5 @@ export const pageSchema = definePage({
     filters: z.record(z.string(), z.string()),
     cursor: z.string().nullable(),
   }),
-  can: ["invoice.read"] as const,
+  can: ["invoice.read", "invoice.create"] as const,
 });
