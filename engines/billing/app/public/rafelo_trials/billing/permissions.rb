@@ -3,7 +3,7 @@
 module RafeloTrials
   module Billing
     module Permissions
-      WIDGET_READ = "billing:widget:read"
+      INVOICE_READ = "billing:invoice:read"
     end
   end
 end
