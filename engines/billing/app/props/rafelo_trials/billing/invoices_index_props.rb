@@ -46,6 +46,7 @@ module RafeloTrials
           id: invoice.id,
           number: invoice.number,
           customerName: invoice.customer_name,
+          customerEmail: invoice.customer_email,
           status: invoice.status,
           total: Rafelo::Core::Money.wire(invoice.total_minor, invoice.currency),
           issuedOn: invoice.issued_on,
