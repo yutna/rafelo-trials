@@ -32,6 +32,12 @@ module RafeloTrials
         invoice(parse(response.body).fetch("data"))
       end
 
+      def delete(id:, idempotency_key:)
+        client.delete("invoices/#{id}", idempotency_key: idempotency_key)
+      rescue Rafelo::Core::ApplicationError => error
+        raise unless error.code == "resource.not_found"
+      end
+
       private
 
       def invoice(row)

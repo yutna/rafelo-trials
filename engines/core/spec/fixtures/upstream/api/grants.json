@@ -2,6 +2,7 @@
   "grants": [
     "billing:invoice:read",
     "billing:invoice:create",
+    "billing:invoice:delete",
     "example_orders:order:read",
     "example_orders:order:create",
     "example_orders:order:update",

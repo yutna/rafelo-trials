@@ -10,6 +10,7 @@ en:
       add: "Add invoice"
       save: "Save"
       created: "Invoice %{number} created."
+      deleted: "Invoice deleted."
       conflict: "The invoice changed since you opened it."
       number: "Invoice number"
       customer: "Customer"
@@ -20,6 +21,13 @@ en:
       previous: "Previous"
       next: "Next"
       page: "Page"
+      actions: "Actions"
+      delete:
+        action: "Delete"
+        title: "Delete invoice?"
+        message: "Delete invoice %{number}? This cannot be undone."
+        confirm: "Delete"
+        cancel: "Cancel"
       statuses:
         open: "Open"
         draft: "Draft"

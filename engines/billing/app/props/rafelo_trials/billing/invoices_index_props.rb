@@ -6,6 +6,7 @@ module RafeloTrials
       policy_class RafeloTrials::Billing::InvoicePolicy
       capability RafeloTrials::Billing::Permissions::INVOICE_READ, :index?
       capability RafeloTrials::Billing::Permissions::INVOICE_CREATE, :create?
+      capability RafeloTrials::Billing::Permissions::INVOICE_DELETE, :destroy?
 
       def initialize(context:, page:, query:)
         super(context: context)
@@ -21,7 +22,7 @@ module RafeloTrials
             previousHref: @query.page > 1 ? page_href(@query.page - 1) : nil,
             nextHref: @query.page < page_count ? page_href(@query.page + 1) : nil
           },
-          meta: {},
+          meta: { formToken: Rafelo::Core::FormToken.issue(session_id: Rafelo::Core::Current.session&.id) },
           query: @query.to_h,
           pagination: {
             kind: "offset",
@@ -32,7 +33,8 @@ module RafeloTrials
           },
           can: capabilities(
             RafeloTrials::Billing::Permissions::INVOICE_READ,
-            RafeloTrials::Billing::Permissions::INVOICE_CREATE
+            RafeloTrials::Billing::Permissions::INVOICE_CREATE,
+            RafeloTrials::Billing::Permissions::INVOICE_DELETE
           )
         }
       end
@@ -46,7 +48,8 @@ module RafeloTrials
           customerName: invoice.customer_name,
           status: invoice.status,
           total: Rafelo::Core::Money.wire(invoice.total_minor, invoice.currency),
-          issuedOn: invoice.issued_on
+          issuedOn: invoice.issued_on,
+          deleteHref: context.urls.route(:billing, :invoice, id: invoice.id)
         }
       end
 
