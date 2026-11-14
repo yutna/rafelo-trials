@@ -1,0 +1,59 @@
+[
+  {
+    "name": "core-imports-nothing-in-the-repository",
+    "severity": "error",
+    "from": {
+      "path": "^engines/core/"
+    },
+    "to": {
+      "path": "^(app|engines)/",
+      "pathNot": [
+        "^engines/core/"
+      ]
+    }
+  },
+  {
+    "name": "design_system-imports-nothing-in-the-repository",
+    "severity": "error",
+    "from": {
+      "path": "^engines/design_system/"
+    },
+    "to": {
+      "path": "^(app|engines)/",
+      "pathNot": [
+        "^engines/design_system/"
+      ]
+    }
+  },
+  {
+    "name": "example_customers-imports-declared-surfaces-only",
+    "severity": "error",
+    "from": {
+      "path": "^engines/example_customers/"
+    },
+    "to": {
+      "path": "^(app|engines)/",
+      "pathNot": [
+        "^engines/example_customers/",
+        "^engines/core/app/frontend/",
+        "^engines/design_system/app/frontend/"
+      ]
+    }
+  },
+  {
+    "name": "example_orders-imports-declared-surfaces-only",
+    "severity": "error",
+    "from": {
+      "path": "^engines/example_orders/"
+    },
+    "to": {
+      "path": "^(app|engines)/",
+      "pathNot": [
+        "^engines/example_orders/",
+        "^engines/core/app/frontend/",
+        "^engines/design_system/app/frontend/",
+        "^engines/example_customers/app/frontend/public/"
+      ]
+    }
+  }
+]

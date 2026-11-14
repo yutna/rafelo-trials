@@ -1,0 +1,122 @@
+require "rails_helper"
+
+RSpec.describe Rafelo::Core::Session do
+  let(:viewer) { Struct.new(:id, :name).new(7, "Ada") }
+
+  def start(ttl: 12.hours)
+    described_class.start(
+      viewer: viewer,
+      access_token: "access-secret",
+      refresh_token: "refresh-secret",
+      access_expires_at: 5.minutes.from_now,
+      ttl: ttl
+    )
+  end
+
+  it "stores only a digest of the cookie token and encrypts the upstream tokens" do
+    session, token = start
+
+    expect(session.token_digest).to eq(described_class.digest(token))
+    expect(described_class.find_by_token(token)).to eq(session)
+    raw = described_class.connection.select_one("SELECT access_token, refresh_token FROM core_sessions WHERE id = #{session.id}")
+    expect(raw["access_token"]).not_to eq("access-secret")
+    expect(raw["refresh_token"]).not_to eq("refresh-secret")
+    expect(session.reload.access_token).to eq("access-secret")
+  end
+
+  it "leaves the tokens and digest out of serialization" do
+    session, = start
+    json = session.as_json
+
+    expect(json.keys).not_to include("access_token", "refresh_token", "token_digest")
+    expect(json.to_s).not_to include("access-secret")
+  end
+
+  it "lets exactly one caller claim a refresh and clears the claim on completion" do
+    session, = start
+    first = described_class.find(session.id)
+    second = described_class.find(session.id)
+
+    version = first.claim_refresh!(timeout: 15)
+    expect(version).to be_a(Integer)
+    expect(second.claim_refresh!(timeout: 15)).to be_nil
+
+    first.complete_refresh!(
+      version: version,
+      access_token: "new-access",
+      refresh_token: "new-refresh",
+      access_expires_at: 5.minutes.from_now
+    )
+    expect(described_class.find(session.id).access_token).to eq("new-access")
+    expect(described_class.find(session.id).refreshing_since).to be_nil
+  end
+
+  it "refuses a refresh completion from a stale claim" do
+    session, = start
+    first = described_class.find(session.id)
+    second = described_class.find(session.id)
+    stale_version = first.claim_refresh!(timeout: 0)
+    first.update_column(:refreshing_since, 2.minutes.ago)
+    second.reload
+    second.claim_refresh!(timeout: 15)
+
+    expect do
+      completed = first.complete_refresh!(
+        version: stale_version,
+        access_token: "stale-access",
+        refresh_token: "stale-refresh",
+        access_expires_at: 5.minutes.from_now
+      )
+      expect(completed).to be(false)
+    end.not_to raise_error
+
+    expect(described_class.find(session.id).access_token).to eq("access-secret")
+  end
+
+  it "sweeps expired sessions" do
+    expired, = start(ttl: -1.minute)
+    live, = start
+
+    described_class.sweep
+
+    expect(described_class.exists?(expired.id)).to be(false)
+    expect(described_class.exists?(live.id)).to be(true)
+  end
+  it "fences a grants write with the generation it read" do
+    session, = start
+    stale = described_class.find(session.id)
+    generation = stale.grants_generation
+    described_class.find(session.id).mark_grants_stale!
+
+    expect(stale.replace_grants!([ "billing:invoice:create" ], generation: generation)).to be(false)
+
+    fresh = described_class.find(session.id)
+    expect(fresh.permission_grants).to eq([])
+    expect(fresh.grants_stale?).to be(true)
+  end
+
+  it "writes grants when the generation still matches" do
+    session, = start
+    generation = session.grants_generation
+
+    expect(session.replace_grants!([ "billing:invoice:create" ], generation: generation)).to be(true)
+
+    expect(session.reload.permission_grants).to eq([ "billing:invoice:create" ])
+    expect(session.grants_stale?).to be(false)
+  end
+
+  it "revokes every session for one viewer" do
+    first, = start
+    second, = start
+    other, = described_class.start(
+      viewer: Struct.new(:id, :name).new(8, "Grace"),
+      access_token: "a", refresh_token: "r", access_expires_at: 5.minutes.from_now
+    )
+
+    expect(described_class.revoke_all!(viewer.id)).to eq(2)
+
+    expect(described_class.exists?(first.id)).to be(false)
+    expect(described_class.exists?(second.id)).to be(false)
+    expect(described_class.exists?(other.id)).to be(true)
+  end
+end

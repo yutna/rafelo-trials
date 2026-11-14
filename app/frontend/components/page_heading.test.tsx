@@ -1,0 +1,14 @@
+import "@testing-library/jest-dom/vitest";
+
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+
+import { PageHeading } from "./page_heading";
+
+describe("PageHeading", () => {
+  it("renders the title as the page heading", () => {
+    render(<PageHeading title="RafeloTrials" />);
+
+    expect(screen.getByRole("heading", { name: "RafeloTrials" })).toBeInTheDocument();
+  });
+});

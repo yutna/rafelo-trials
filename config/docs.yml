@@ -1,0 +1,28 @@
+# Pages and files that `docs:check` treats as AI instructions (CT-09).
+#
+# Every `AGENTS.md` and `CLAUDE.md` at any depth is scanned automatically, as
+# are the maintainer notes under `docs/development/` when they exist. This list
+# adds the skills and the glossary. Paths are relative to the repository root
+# and may be globs.
+ai_instruction_files:
+  - ".opencode/skills/deliver-request/SKILL.md"
+  - ".opencode/skills/add-copy/SKILL.md"
+  - ".opencode/skills/add-design-system-component/SKILL.md"
+  - ".opencode/skills/add-module/SKILL.md"
+  - ".opencode/skills/add-read-page/SKILL.md"
+  - ".opencode/skills/add-write-action/SKILL.md"
+  - ".opencode/skills/expose-public-interface/SKILL.md"
+  - ".opencode/skills/fix-failing-guard/SKILL.md"
+  - ".opencode/skills/migrate-a-feature/SKILL.md"
+  - "docs/opencode.md"
+
+# CT-09 checks every backticked repository path. A path owned by a later
+# milestone is recorded here with its owner so the check stays honest, and
+# the check fails as soon as the path exists (remove the entry then). See
+# #21 for the staging decision.
+deferred_paths:
+  script/ci/apply_check: "FE-06 guard, final hardening milestone"
+  script/ci/eslint: "TS-05/FE-06 guards, final hardening milestone"
+  script/ci/eslint/check_config.mjs: "TS-05/FE-06 guard, final hardening milestone"
+  script/ci/eslint/rafelo.mjs: "TS-05 guard, final hardening milestone"
+  script/ci/touch_rate: "ARCH-12 scheduled metric; enabled at three product modules"

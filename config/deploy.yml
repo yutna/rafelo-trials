@@ -1,0 +1,100 @@
+# Single-host deployment profile (the default). The multi-host profile is
+# config/deploy.multi.yml: bin/kamal -c config/deploy.multi.yml deploy.
+#
+# Both profiles use this image and code. Data lives in PostgreSQL and files in
+# the Active Storage service (ARCH-13); the only host-local state here is the
+# PostgreSQL accessory volume and the Disk Active Storage volume.
+service: rafelo_trials
+
+# The first host runs db:prepare before /up; size this for boot migrations.
+deploy_timeout: 120
+
+# One host at a time; the first runs db:prepare before the next boots.
+boot:
+  limit: 1
+
+# Name of the container image (use your-user/app-name on external registries).
+image: rafelo_trials
+
+# Deploy to these servers. Add a job role here only after moving Solid Queue
+# out of Puma; the multi-host profile shows that shape.
+servers:
+  web:
+    - 192.168.0.1
+
+# Thruster terminates nothing; kamal-proxy terminates TLS. Set ssl and host
+# when the host is public.
+proxy:
+  # Cap request bodies at the edge; the core report endpoints have a smaller
+  # Rack cap, and uploads will use their own path (SEC-13).
+  buffering:
+    max_request_body: 1_048_576
+
+# Where you keep your container images.
+registry:
+  server: localhost:5555
+
+# Inject ENV variables into containers (secrets come from .kamal/secrets).
+env:
+  secret:
+    - RAILS_MASTER_KEY
+  clear:
+    # Run the Solid Queue supervisor inside the web Puma process. The
+    # multi-host profile removes this variable and runs a job role instead,
+    # because any value (including "false") turns the plugin on.
+    SOLID_QUEUE_IN_PUMA: true
+
+    # local is the Disk service on the rafelo_trials_storage volume below; choose
+    # amazon (and set AWS_REGION/AWS_BUCKET) for an S3-compatible service.
+    ACTIVE_STORAGE_SERVICE: local
+
+    DB_HOST: rafelo_trials-db
+    DB_NAME: rafelo_trials_production
+    DB_USER: rafelo_trials_runtime
+    DB_MIGRATION_USER: rafelo_trials_migrator
+
+    RAFELO_TRIALS_API_BASE_URL: https://api.example.com
+    RAILS_HOSTS: app.example.com
+
+    RAILS_MAX_THREADS: 5
+    WEB_CONCURRENCY: 2
+    JOB_CONCURRENCY: 1
+
+# Aliases are triggered with "bin/kamal <alias>". You can overwrite arguments on invocation:
+# "bin/kamal logs -r job" will tail logs from the first server in the job section.
+aliases:
+  console: app exec --interactive --reuse "bin/rails console"
+  shell: app exec --interactive --reuse "bash"
+  logs: app logs -f
+  dbc: app exec --interactive --reuse "bin/rails dbconsole --include-password"
+
+# Disk Active Storage for the single-host profile. It is a persistent volume,
+# not request or job scratch space.
+volumes:
+  - "rafelo_trials_storage:/rails/storage"
+
+# Bridge fingerprinted assets, like JS and CSS, between versions to avoid
+# hitting 404 on in-flight requests. Combines all files from new and old
+# version inside the asset_path.
+asset_path: /rails/public/vite
+
+# Configure the image builder.
+builder:
+  arch: amd64
+
+# PostgreSQL accessory for the single-host profile. The image is pinned by
+# version and digest at the Dev Container's major version (OPS-09); a major
+# upgrade is planned work, never a tag bump.
+accessories:
+  db:
+    image: postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
+    host: 192.168.0.1
+    port: "127.0.0.1:5432:5432"
+    env:
+      clear:
+        POSTGRES_DB: rafelo_trials_production
+        POSTGRES_USER: postgres
+      secret:
+        - POSTGRES_PASSWORD
+    volumes:
+      - "rafelo_trials-db-data:/var/lib/postgresql"
