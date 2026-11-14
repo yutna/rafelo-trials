@@ -12,6 +12,7 @@ export { Image } from "../image";
 export { Link } from "../link";
 export { Pagination } from "../pagination";
 export { Skeleton } from "../skeleton";
+export { StatusBadge } from "../status_badge";
 export { TextField } from "../text_field";
 export { Toast } from "../toast";
 export { calendarFor, formatDate, formatMoney, formatNumber, isValidIsoDate } from "../formatters";

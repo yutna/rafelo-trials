@@ -19,7 +19,11 @@
   "catalog": {
     "title": "Component catalog",
     "controls": "Controls",
+    "statuses": "Statuses",
     "data": "Data",
+    "invoice_draft": "Draft",
+    "invoice_paid": "Paid",
+    "invoice_overdue": "Overdue",
     "open_dialog": "Open dialog",
     "total": "Total",
     "name": "Name",
