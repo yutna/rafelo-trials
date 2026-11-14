@@ -3,6 +3,7 @@ export { Dialog } from "./dialog";
 export { Icon } from "./icon";
 export { Pagination } from "./pagination";
 export { Skeleton } from "./skeleton";
+export { StatusBadge } from "./status_badge";
 export { TextField } from "./text_field";
 export { Toast } from "./toast";
 export { I18nProvider, useLocale } from "./i18n_provider";

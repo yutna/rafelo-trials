@@ -19,7 +19,11 @@
   "catalog": {
     "title": "แค็ตตาล็อกคอมโพเนนต์",
     "controls": "ตัวควบคุม",
+    "statuses": "สถานะ",
     "data": "ข้อมูล",
+    "invoice_draft": "ฉบับร่าง",
+    "invoice_paid": "ชำระแล้ว",
+    "invoice_overdue": "เกินกำหนดชำระ",
     "open_dialog": "เปิดกล่องโต้ตอบ",
     "total": "รวม",
     "name": "ชื่อ",
