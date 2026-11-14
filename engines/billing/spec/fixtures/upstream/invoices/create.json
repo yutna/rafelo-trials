@@ -3,6 +3,7 @@
     "id": "inv_101",
     "number": "INV-101",
     "customer_name": "Ada Example",
+    "customer_email": "ada@example.test",
     "status": "open",
     "total_minor": 1250,
     "currency": "THB",

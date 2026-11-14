@@ -48,6 +48,7 @@ RSpec.describe "Billing invoices", type: :request do
     expect(invoice).to include(
       "number" => "INV-001",
       "customerName" => "Ada Example",
+      "customerEmail" => "ada@example.test",
       "status" => "draft",
       "issuedOn" => "2026-11-12"
     )

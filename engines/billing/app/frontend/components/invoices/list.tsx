@@ -12,6 +12,7 @@ export type InvoiceRow = {
   id: string;
   number: string;
   customerName: string;
+  customerEmail: string;
   status: string;
   total: { minor: number; currency: string; exponent: number };
   issuedOn: string;
@@ -46,6 +47,7 @@ export function InvoicesList({ items, canDelete, onDelete }: Props) {
       id: invoice.id,
       number: invoice.number,
       customer: invoice.customerName,
+      customerEmail: invoice.customerEmail,
       status: status === statusKey ? invoice.status : status,
       total: formatMoney(
         invoice.total.minor,
@@ -58,7 +60,23 @@ export function InvoicesList({ items, canDelete, onDelete }: Props) {
   });
   const columns: Parameters<typeof DataTable>[0]["columns"] = [
     { accessorKey: "number", header: t("invoices.number") },
-    { accessorKey: "customer", header: t("invoices.customer") },
+    {
+      accessorKey: "customer",
+      header: t("invoices.customer"),
+      cell: ({ row }) => (
+        <div>
+          <span className="font-medium">
+            {String(row.original.customer)}
+          </span>
+          <span
+            className="block text-slate-600"
+            data-testid={`billing.invoices.index.customer-email.${String(row.original.id)}`}
+          >
+            {String(row.original.customerEmail)}
+          </span>
+        </div>
+      ),
+    },
     { accessorKey: "status", header: t("invoices.status") },
     { accessorKey: "total", header: t("invoices.total") },
     { accessorKey: "issuedOn", header: t("invoices.issued_on") },
