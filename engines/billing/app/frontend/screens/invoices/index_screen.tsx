@@ -3,6 +3,8 @@ import { Link } from "@design_system/public";
 import { InvoicesList, type InvoiceRow } from "../../components/invoices/list";
 import { useBillingTranslation } from "../../i18n";
 
+type Capability = { allowed: boolean; reason: string | null };
+
 type Pagination = {
   kind: "offset";
   page: number;
@@ -13,15 +15,19 @@ type Pagination = {
 
 type Props = {
   items: InvoiceRow[];
+  newHref: string;
   previousHref: string | null;
   nextHref: string | null;
+  can: Record<string, Capability>;
   pagination: Pagination | null;
 };
 
 export function InvoicesScreen({
   items,
+  newHref,
   previousHref,
   nextHref,
+  can,
   pagination,
 }: Props) {
   const t = useBillingTranslation();
@@ -33,6 +39,15 @@ export function InvoicesScreen({
     >
       <h1 className="text-display font-semibold">{t("invoices.title")}</h1>
       <p className="mt-1 text-slate-600">{t("invoices.subtitle")}</p>
+      {can["invoice.create"]?.allowed ? (
+        <p className="mt-4">
+          <Link href={newHref} className="underline">
+            <span data-testid="billing.invoices.index.new">
+              {t("invoices.add")}
+            </span>
+          </Link>
+        </p>
+      ) : null}
       <InvoicesList items={items} />
       {pagination ? (
         <nav

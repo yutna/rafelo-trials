@@ -14,6 +14,7 @@ export default function InvoicesIndex(props: Record<string, unknown>) {
       <Head title={t("invoices.title")} />
       <InvoicesScreen
         {...page.data}
+        can={page.can}
         pagination={page.pagination?.kind === "offset" ? page.pagination : null}
       />
     </>
