@@ -5,7 +5,7 @@ en:
     invoices:
       title: "Invoices"
       subtitle: "Invoices for this account."
-      empty: "No invoices to show."
+      empty: "No invoices yet."
       new: "New invoice"
       add: "Add invoice"
       save: "Save"
