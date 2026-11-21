@@ -83,4 +83,4 @@ gem "strong_migrations", "= 2.8.0"
 
 gem "lograge", "= 0.15.1"
 
-gem "aws-sdk-s3", "= 1.242.0"
+gem "aws-sdk-s3", "1.244.0"
