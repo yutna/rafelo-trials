@@ -8,6 +8,7 @@ import { Dialog } from "@design_system/dialog";
 import { Icon } from "@design_system/icon";
 import { Pagination } from "@design_system/pagination";
 import { Skeleton } from "@design_system/skeleton";
+import { StatusBadge } from "@design_system/status_badge";
 import { TextField } from "@design_system/text_field";
 import { Toast } from "@design_system/toast";
 import { lazy, Suspense } from "react";
@@ -49,6 +50,20 @@ export function ComponentCatalogContainer() {
         <Toast testId="catalog-toast" tone="success">
           {t("app:catalog.saved")}
         </Toast>
+        <div className="space-y-2">
+          <h3 className="text-sm font-semibold">{t("app:catalog.badges")}</h3>
+          <div className="flex flex-wrap gap-2">
+            <StatusBadge testId="catalog-badge-neutral" tone="neutral">
+              {t("app:catalog.badge_neutral")}
+            </StatusBadge>
+            <StatusBadge testId="catalog-badge-success" tone="success">
+              {t("app:catalog.badge_success")}
+            </StatusBadge>
+            <StatusBadge testId="catalog-badge-warning" tone="warning">
+              {t("app:catalog.badge_warning")}
+            </StatusBadge>
+          </div>
+        </div>
         <Skeleton testId="catalog-skeleton" />
         <Pagination
           testId="catalog-pagination"

@@ -33,6 +33,9 @@ test("catalog screenshot matches its committed baseline", async ({ page }) => {
   await expect(page.getByTestId("catalog-button")).toBeVisible();
   await expect(page.getByTestId("catalog-chart")).toBeVisible();
   await expect(page.getByTestId("catalog-empty")).toBeVisible();
+  await expect(page.getByTestId("catalog-badge-neutral")).toBeVisible();
+  await expect(page.getByTestId("catalog-badge-success")).toBeVisible();
+  await expect(page.getByTestId("catalog-badge-warning")).toBeVisible();
   await expectCatalogFits(page);
   await expect(page).toHaveScreenshot("catalog.png", { fullPage: false, animations: "disabled" });
 });

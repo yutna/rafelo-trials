@@ -346,6 +346,7 @@ declare module "@design_system/index" {
   export { Pagination } from "@design_system/pagination";
   export { Select } from "@design_system/select";
   export { Skeleton } from "@design_system/skeleton";
+  export { StatusBadge } from "@design_system/status_badge";
   export { Tabs } from "@design_system/tabs";
   export { TextField } from "@design_system/text_field";
   export { Toast } from "@design_system/toast";
@@ -430,6 +431,7 @@ declare module "@design_system/public" {
   export { Pagination } from "@design_system/pagination";
   export { Select } from "@design_system/select";
   export { Skeleton } from "@design_system/skeleton";
+  export { StatusBadge } from "@design_system/status_badge";
   export { Tabs } from "@design_system/tabs";
   export { TextField } from "@design_system/text_field";
   export { Toast } from "@design_system/toast";
@@ -477,6 +479,17 @@ declare module "@design_system/skeleton" {
   export function Skeleton({ testId }: {
       testId: string;
   }): import("react").JSX.Element;
+}
+
+declare module "@design_system/status_badge" {
+  import type { ReactNode } from "react";
+  type StatusBadgeProps = {
+      testId: string;
+      tone?: "neutral" | "success" | "warning";
+      children: ReactNode;
+  };
+  export function StatusBadge({ testId, tone, children }: StatusBadgeProps): import("react").JSX.Element;
+  export {};
 }
 
 declare module "@design_system/tabs" {
