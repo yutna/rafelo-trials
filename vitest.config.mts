@@ -1,30 +1,30 @@
-import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
 import { engineAliases } from "./config/frontend_aliases.mts";
+import { reactPlugins } from "./config/frontend_react.mts";
 
 export default defineConfig({
   resolve: { alias: engineAliases },
   test: {
     projects: [
       {
-        plugins: [react()],
+        plugins: reactPlugins(),
         test: {
           name: "app",
           environment: "jsdom",
-          include: [
-            "app/frontend/**/*.test.tsx",
-            "app/frontend/**/hooks/**/*.test.ts",
-          ],
+          include: ["app/frontend/**/*.test.tsx", "app/frontend/**/hooks/**/*.test.ts"],
           setupFiles: ["./vitest.setup.ts"],
         },
       },
       {
-        plugins: [react()],
+        plugins: reactPlugins(),
         test: {
           name: "engines",
           environment: "jsdom",
-          include: ["engines/*/app/frontend/**/*.test.tsx", "engines/*/app/frontend/**/hooks/**/*.test.ts"],
+          include: [
+            "engines/*/app/frontend/**/*.test.tsx",
+            "engines/*/app/frontend/**/hooks/**/*.test.ts",
+          ],
           exclude: ["engines/*/spec/**"],
           setupFiles: ["./vitest.setup.ts"],
         },

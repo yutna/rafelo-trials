@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+
 import { Button as AriaButton } from "react-aria-components";
 
 import { tv } from "./internal/tailwind";
@@ -22,6 +23,7 @@ type ButtonProps = {
   className?: string;
   onPress?: () => void;
   isDisabled?: boolean;
+  isPending?: boolean;
   children: ReactNode;
 };
 

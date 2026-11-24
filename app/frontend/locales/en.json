@@ -5,6 +5,12 @@
     "description": "Rails serves the page, Inertia carries the props, and React renders it."
   },
   "skip": "Skip to content",
+  "nav": {
+    "label": "Main navigation"
+  },
+  "locale": {
+    "label": "Language"
+  },
   "errors": {
     "page_title": "Something went wrong.",
     "go_home": "Go home",
@@ -19,11 +25,7 @@
   "catalog": {
     "title": "Component catalog",
     "controls": "Controls",
-    "statuses": "Statuses",
     "data": "Data",
-    "invoice_draft": "Draft",
-    "invoice_paid": "Paid",
-    "invoice_overdue": "Overdue",
     "open_dialog": "Open dialog",
     "total": "Total",
     "name": "Name",
@@ -36,6 +38,27 @@
     "sample": "Sample chart",
     "dialog": "Dialog",
     "close": "Close",
-    "dialog_body": "Dialog body"
+    "dialog_body": "Dialog body",
+    "primitives": "Primitives",
+    "status": "Status",
+    "actions": "Actions",
+    "owner": "Owner",
+    "sections": "Sections",
+    "filters": "Filters",
+    "search": "Search",
+    "open": "Open",
+    "paid": "Paid",
+    "archive": "Archive",
+    "delete": "Delete",
+    "confirm_title": "Delete item?",
+    "confirm_message": "This cannot be undone.",
+    "cancel": "Cancel",
+    "empty_title": "Nothing here",
+    "empty_description": "No records to show.",
+    "create": "Create",
+    "details": "Details",
+    "details_body": "The details panel.",
+    "history": "History",
+    "history_body": "The history panel."
   }
 }

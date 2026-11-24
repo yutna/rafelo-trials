@@ -13,6 +13,23 @@ RSpec.describe "rafelo:restore:prepare" do
     task.reenable
     ENV.delete("RAFELO_TRIALS_DATABASE_ROLE")
     ENV.delete("RAFELO_TRIALS_RESTORE_CONFIRMED")
+    ENV.delete("RESTORE_DATABASE_URL")
+  end
+
+  def confirm!
+    ENV["RAFELO_TRIALS_DATABASE_ROLE"] = "migration"
+    ENV["RAFELO_TRIALS_RESTORE_CONFIRMED"] = "1"
+  end
+
+  def live_database_url
+    config = ActiveRecord::Base.connection_db_config.configuration_hash
+    user = config[:username] || "postgres"
+    password = config[:password]
+    credentials = password.present? ? "#{user}:#{password}" : user
+    host = config[:host].presence || "localhost"
+    port = config[:port] || 5432
+
+    "postgres://#{credentials}@#{host}:#{port}/#{config[:database]}"
   end
 
   it "refuses without the migration role" do
@@ -27,17 +44,80 @@ RSpec.describe "rafelo:restore:prepare" do
     expect { task.invoke }.to raise_error(SystemExit)
   end
 
-  it "empties sessions when both guards are present" do
-    Rafelo::Core::Session.create!(
-      token_digest: "drill-session",
+  it "refuses without RESTORE_DATABASE_URL" do
+    confirm!
+
+    expect { task.invoke }.to raise_error(SystemExit)
+  end
+
+  it "refuses a target that is the live database" do
+    confirm!
+    ENV["RESTORE_DATABASE_URL"] = live_database_url
+
+    expect { task.invoke }.to raise_error(SystemExit)
+  end
+
+  it "documents every production boot key the restore command needs" do
+    command = File.read(Rails.root.join("docs/operations/backup-restore.md"))
+      .match(/RESTORE_DATABASE_URL=.*?bin\/rails rafelo:restore:prepare/m)
+      .to_s
+
+    %w[RAILS_MASTER_KEY RAILS_HOSTS DB_USER RAFELO_TRIALS_API_BASE_URL].each do |key|
+      expect(command).to include(key)
+    end
+  end
+end
+
+RSpec.describe "rafelo:restore:prepare against a scratch target", :database_roles,
+               if: DatabaseRoleSpecs.available?("rafelo_restore") do
+  let(:scratch) { ScratchDatabase.new("rafelo_restore") }
+  let(:task) { Rake::Task["rafelo:restore:prepare"] }
+
+  before do
+    scratch.create!
+    @connection = scratch.connect
+    @connection.exec("CREATE TABLE core_sessions (id bigserial PRIMARY KEY)")
+    @connection.exec("INSERT INTO core_sessions DEFAULT VALUES")
+    options = scratch.options
+    credentials = options[:password] ? "#{options[:user]}:#{options[:password]}" : options[:user]
+    @url = "postgres://#{credentials}@#{options[:host]}:#{options[:port]}/#{options[:dbname]}"
+
+    Rails.application.load_tasks unless Rake::Task.task_defined?("rafelo:restore:prepare")
+    task.reenable
+    ENV["RAFELO_TRIALS_DATABASE_ROLE"] = "migration"
+    ENV["RAFELO_TRIALS_RESTORE_CONFIRMED"] = "1"
+    ENV["RESTORE_DATABASE_URL"] = @url
+  end
+
+  after do
+    task.reenable
+    ENV.delete("RAFELO_TRIALS_DATABASE_ROLE")
+    ENV.delete("RAFELO_TRIALS_RESTORE_CONFIRMED")
+    ENV.delete("RESTORE_DATABASE_URL")
+    @connection&.close unless @connection&.finished?
+    scratch.drop!
+    scratch.close
+  end
+
+  it "empties the scratch sessions and leaves the live sessions alone" do
+    live = Rafelo::Core::Session.create!(
+      token_digest: "live-session",
       viewer_id: "7",
       expires_at: 1.hour.from_now
     )
-    ENV["RAFELO_TRIALS_DATABASE_ROLE"] = "migration"
-    ENV["RAFELO_TRIALS_RESTORE_CONFIRMED"] = "1"
 
     expect { task.invoke }.not_to raise_error
 
-    expect(Rafelo::Core::Session.count).to eq(0)
+    expect(@connection.exec("SELECT count(*) FROM core_sessions").getvalue(0, 0)).to eq("0")
+    expect(Rafelo::Core::Session.where(id: live.id).exists?).to be(true)
+  end
+
+  it "refuses a connected role that is not the configured migration role" do
+    ENV["DB_MIGRATION_USER"] = "someone_else"
+
+    expect { task.invoke }.to raise_error(SystemExit)
+    expect(@connection.exec("SELECT count(*) FROM core_sessions").getvalue(0, 0)).to eq("1")
+  ensure
+    ENV.delete("DB_MIGRATION_USER")
   end
 end

@@ -1,6 +1,6 @@
 require_relative "rails_helper"
 
-RSpec.describe Rafelo::ExampleOrders::OrderExportJob do
+RSpec.describe RafeloTrials::ExampleOrders::OrderExportJob do
   it "exports every page with CSV-safe fields" do
     viewer = Struct.new(:id, :name).new(7, "Ada")
     session, = Rafelo::Core::Session.start(

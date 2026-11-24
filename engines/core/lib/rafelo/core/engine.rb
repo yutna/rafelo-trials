@@ -3,6 +3,7 @@
 require "rails/engine"
 require_relative "../../../app/models/rafelo/core/locales"
 require_relative "../../../app/models/rafelo/core/upstream_config"
+require_relative "../../../app/models/rafelo/core/budgets"
 require_relative "../../../app/models/rafelo/core/flags"
 
 module Rafelo
@@ -15,8 +16,11 @@ module Rafelo
       end
 
       initializer "rafelo_core.runtime" do |app|
-        app.config.x.executor_threads = 4
-        app.config.x.puma_threads = ENV.fetch("RAILS_MAX_THREADS", 3).to_i
+        core_config = app.config_for(:core)
+        app.config.x.executor = Data.define(:size).new(size: core_config.fetch(:executor).fetch(:size).to_i)
+        app.config.x.puma_threads = core_config.fetch(:puma_threads, 3).to_i
+        app.config.x.process = ActiveSupport::OrderedOptions.new
+        app.config.x.process.role = core_config.fetch(:process).fetch(:role).to_s
         app.config.x.requests.upstream_deadline_seconds = 10
         app.config.x.sessions.refresh_timeout_seconds = 15
         app.config.x.sessions.idle_timeout_seconds = 30 * 60
@@ -27,7 +31,7 @@ module Rafelo
         app.config.x.exports.ttl_seconds = 6 * 60 * 60
         app.config.x.audit.retention_days = 365
         app.config.x.audit.partition_months_ahead = 2
-        app.config.x.database.runtime_role = ENV["DB_USER"]
+        app.config.x.database.runtime_role = core_config.dig(:database, :runtime_role)
         app.config.x.sessions.touch_interval_seconds = 5 * 60
         app.config.x.downloads.max_concurrent = 2
         app.config.x.downloads.max_bytes = 52_428_800
@@ -36,6 +40,8 @@ module Rafelo
       initializer "rafelo_core.upstreams" do |app|
         app.config.x.upstreams = Rafelo::Core::UpstreamConfig.load_all(app.config_for(:upstreams))
         app.config.x.flags = Rafelo::Core::Flags.load(app.config_for(:flags))
+        app.config.x.budgets = Rafelo::Core::Budgets.load(root: app.root)
+        app.config.x.budgets.validate!(app.config.x.upstreams.keys)
       end
 
       initializer "rafelo_core.locales" do |app|

@@ -48,7 +48,9 @@ rise until an owner approves it. No workflow commits to `main`; lower counts
 arrive in a pull request. On a GitHub plan without required code-owner
 review, `script/ci/guard_approval` enforces the same approval for the other
 guard files, and without branch protection all of this rests on convention
-(WF-03).
+(WF-03). The AI works under its own GitHub identity, never a person's account,
+so a person's approving review is a real decision; an approval by the pull
+request's own author never counts (WF-03).
 
 The root `AGENTS.md` carries the matching line in its "Never" list: never
 loosen a guard to make something pass; propose the change in the pull request
@@ -183,6 +185,7 @@ points:
 | Plain Ruby objects (value objects a gateway returns, props objects) | `oo-ruby` |
 | TypeScript classes in `domain/` and `forms/` (OOP-01 to OOP-10) | `oo-typescript` |
 | What Rails or React builds and wires (controllers, models, jobs, components, hooks) | `oo-working-within-a-framework`; the framework's conventions and the FE rules win |
+| Moving legacy code into an engine | `oo-working-with-legacy-code` |
 | Reviewing a diff | `oo-reviewing-object-design`; it assists a person and never counts as a guard (ADR-32) |
 
 `bin/kernel_update` never touches the AI files or the pack. A template release
@@ -284,9 +287,10 @@ and lists synonyms to avoid so a concept does not get a second name.
   what it needs, or what it needs moves first: into the owning engine's public
   surface, a domain engine, core, or design_system (ARCH-05).
 - The dependency guards apply from the first engine (ARCH-08). Code-level lint
-  rules are scoped by path: they apply in full under `engines/`, and the ESLint
-  and RuboCop configurations list the legacy paths in `app/`. The ratchet
-  counts them (`legacy_lint_paths`), so the list only shrinks.
+  rules are scoped by path: they apply in full under `engines/`, and each legacy path in `app/`
+  that the ESLint or RuboCop configuration exempts carries a
+  `legacy-lint-path:` marker there (`09_enforcement.md`, Ratchets). The ratchet counts the marked paths
+  (`legacy_lint_paths`), so the list only shrinks.
 - The order:
   1. the guards, core, and design_system;
   2. the first module, migrated end to end and reviewed by a person as the

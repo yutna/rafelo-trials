@@ -1,26 +1,28 @@
+import { chartSchema, definePage, moneySchema } from "@core/contracts/page_props.schema";
+import { hrefSchema } from "@design_system/safe_url";
 import { z } from "zod";
-
-import { definePage } from "@core/contracts/page_props.schema";
 
 const orderSchema = z.object({
   id: z.string(),
   number: z.string(),
   customer: z.object({ id: z.string(), name: z.string(), tier: z.string() }),
   status: z.string(),
-  total: z.object({ minor: z.int(), currency: z.string().length(3), exponent: z.int() }),
+  total: moneySchema,
   issuedOn: z.string(),
-  href: z.string(),
+  href: hrefSchema,
 });
 
 export const pageSchema = definePage({
   data: z.object({
     items: z.array(orderSchema),
-    newHref: z.string().nullable(),
-    exportPath: z.string(),
-    filterHrefs: z.array(z.object({ label: z.string(), href: z.string(), current: z.boolean() })),
-    previousHref: z.string().nullable(),
-    nextHref: z.string().nullable(),
-    chart: z.object({ series: z.array(z.record(z.string(), z.unknown())) }).optional(),
+    newHref: hrefSchema.nullable(),
+    exportHref: hrefSchema,
+    filterHrefs: z.array(
+      z.object({ key: z.string(), label: z.string(), href: hrefSchema, current: z.boolean() }),
+    ),
+    previousHref: hrefSchema.nullable(),
+    nextHref: hrefSchema.nullable(),
+    chart: chartSchema.optional(),
   }),
   meta: z.object({ formToken: z.string() }),
   query: z.object({

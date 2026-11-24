@@ -13,11 +13,12 @@ root = File.expand_path(root)
 abort "skips: root does not exist: #{root}" unless Dir.exist?(root)
 
 SKIP_FORMS = [
-  /(?<![\w.])skip(?!\s*:)/,
+  /(?<![\w.:])skip(?![\w:])/,
   /\b(?:xit|xspecify|xexample|xdescribe|xcontext)\b/,
   /\.skip\b/,
   /\bpending(?!\s*:)\b/,
   /\b(?:skip|pending):/,
+  /\b(?:it|specify|example|describe|context|feature|scenario)\b.*(?<![\w:]):skip\b/,
   /\bprosopite:\s*false\b/,
   /\bProsopite\.pause\b/,
   /\b(?:it|test|describe)\.(?:todo|skipIf|fixme)\b/,
@@ -31,6 +32,9 @@ patterns = [
   "app/frontend/**/*.test.ts",
   "app/frontend/**/*.test.tsx",
   "e2e/**/*.ts",
+  "engines/*/spec/**/*",
+  "engines/*/app/frontend/**/*.test.ts",
+  "engines/*/app/frontend/**/*.test.tsx",
   "engines/*/e2e/**/*.ts"
 ]
 files = patterns.flat_map { |pattern| Dir[File.join(root, pattern)] }.uniq.select { |path| File.file?(path) }
@@ -40,6 +44,9 @@ findings = 0
 files.each do |path|
   relative = path.delete_prefix("#{root}/")
   next if relative.start_with?("spec/enforcement/fixtures/")
+  # A test-only engine keeps application code under spec/; its controller
+  # callbacks are not skipped tests.
+  next if relative.match?(%r{\Aengines/[^/]+/spec/[^/]+/app/})
 
   File.readlines(path, chomp: true).each_with_index do |line, index|
     code = line.split(/\s+#\s*/, 2).first || ""

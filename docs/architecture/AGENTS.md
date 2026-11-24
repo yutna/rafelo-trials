@@ -107,9 +107,12 @@ ADR change; do not work around it.
   (ARCH-05, ARCH-09, ARCH-10).
 - Read or print `.env`, `config/master.key`, `config/credentials/production.key`,
   the decrypted production credentials (`bin/rails credentials:show
-  --environment production`), or tokens. Put secrets or real personal data in
-  code, tests, fixtures, logs, or issues; a new secret goes into the dummy
-  credentials with a dummy value, and a person adds the real one (BE-08).
+  --environment production`), or tokens.
+- Put secrets or real personal data in code, tests, fixtures, logs, or issues.
+  A new secret goes into the dummy credentials with a dummy value, and a person
+  adds the real one (BE-08).
+- Push, open, or merge pull requests under a person's account. You work under
+  your own GitHub identity, so a person's approval is real (WF-03).
 - Disable Brakeman, an audit, or a CI step. A disable comment needs a reason
   (FE-10), a skip a linked issue (TS-05); both count against the ratchet.
 - Add a dependency without an issue, or a framework-level library without an

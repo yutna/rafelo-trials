@@ -5,6 +5,12 @@
     "description": "Rails ให้บริการหน้าเว็บ Inertia ส่งข้อมูล และ React เรนเดอร์"
   },
   "skip": "ข้ามไปยังเนื้อหา",
+  "nav": {
+    "label": "การนำทางหลัก"
+  },
+  "locale": {
+    "label": "ภาษา"
+  },
   "errors": {
     "page_title": "เกิดข้อผิดพลาด",
     "go_home": "กลับหน้าแรก",
@@ -19,11 +25,7 @@
   "catalog": {
     "title": "แค็ตตาล็อกคอมโพเนนต์",
     "controls": "ตัวควบคุม",
-    "statuses": "สถานะ",
     "data": "ข้อมูล",
-    "invoice_draft": "ฉบับร่าง",
-    "invoice_paid": "ชำระแล้ว",
-    "invoice_overdue": "เกินกำหนดชำระ",
     "open_dialog": "เปิดกล่องโต้ตอบ",
     "total": "รวม",
     "name": "ชื่อ",
@@ -36,6 +38,27 @@
     "sample": "แผนภูมิตัวอย่าง",
     "dialog": "กล่องโต้ตอบ",
     "close": "ปิด",
-    "dialog_body": "เนื้อหากล่องโต้ตอบ"
+    "dialog_body": "เนื้อหากล่องโต้ตอบ",
+    "primitives": "องค์ประกอบพื้นฐาน",
+    "status": "สถานะ",
+    "actions": "การกระทำ",
+    "owner": "ผู้รับผิดชอบ",
+    "sections": "ส่วนต่างๆ",
+    "filters": "ตัวกรอง",
+    "search": "ค้นหา",
+    "open": "เปิด",
+    "paid": "ชำระแล้ว",
+    "archive": "เก็บถาวร",
+    "delete": "ลบ",
+    "confirm_title": "ลบรายการหรือไม่",
+    "confirm_message": "การกระทำนี้ไม่สามารถย้อนกลับได้",
+    "cancel": "ยกเลิก",
+    "empty_title": "ไม่มีข้อมูล",
+    "empty_description": "ไม่มีรายการให้แสดง",
+    "create": "สร้าง",
+    "details": "รายละเอียด",
+    "details_body": "เนื้อหาแผงรายละเอียด",
+    "history": "ประวัติ",
+    "history_body": "เนื้อหาแผงประวัติ"
   }
 }

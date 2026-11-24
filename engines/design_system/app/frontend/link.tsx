@@ -1,18 +1,37 @@
-import { Link as InertiaLink } from "@inertiajs/react";
 import type { ReactNode } from "react";
 
-import { isSafeUrl } from "./safe_url";
+import { Link as InertiaLink } from "@inertiajs/react";
+
+import type { Href } from "./safe_url";
+
+import { isAppPath, isSafeUrl } from "./safe_url";
 
 type LinkProps = {
-  href: string;
+  testId: string;
+  href: Href;
   children: ReactNode;
   className?: string;
 };
 
-export function Link({ href, children, className }: LinkProps) {
-  if (!isSafeUrl(href)) return <span className={className}>{children}</span>;
+export function Link({ testId, href, children, className }: LinkProps) {
+  if (!isSafeUrl(href)) {
+    return (
+      <span data-testid={testId} className={className}>
+        {children}
+      </span>
+    );
+  }
+
+  if (!isAppPath(href)) {
+    return (
+      <a data-testid={testId} href={href} className={className}>
+        {children}
+      </a>
+    );
+  }
+
   return (
-    <InertiaLink href={href} className={className}>
+    <InertiaLink data-testid={testId} href={href} className={className}>
       {children}
     </InertiaLink>
   );

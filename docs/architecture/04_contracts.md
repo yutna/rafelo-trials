@@ -560,7 +560,8 @@ file or an AI instruction file cites a rule or ADR ID that does not exist, or
 a superseded ADR, and when such a file names, in backticks, a repository path
 under `script/`, `bin/`, `spec/`, `engines/`, `config/`, `app/`, or
 `.github/` that does not exist, with or without an extension: a pattern that
-requires an extension never checks `script/ci/*`.
+requires an extension never checks `script/ci/*`. The check has no list of
+paths to skip: a missing path is created or the text that names it changes.
 
 - AI instruction files are `AGENTS.md` and `CLAUDE.md` at any depth, plus
   the files the `ai_instruction_files` list in `config/docs.yml` names

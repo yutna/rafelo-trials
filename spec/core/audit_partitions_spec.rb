@@ -27,7 +27,11 @@ RSpec.describe Rafelo::Core::AuditPartitions do
     expect(Rails.error).to receive(:report).with(
       instance_of(described_class::DefaultPartitionOccupied),
       handled: false,
-      context: { rows: 1 }
+      context: {
+        partition: described_class::DEFAULT_TABLE,
+        database_role: ActiveRecord::Base.connection.select_value("SELECT current_user").to_s,
+        rows: 1
+      }
     )
 
     expect(partitions.alert_default!).to be(true)

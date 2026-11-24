@@ -1,6 +1,17 @@
 require_relative "boot"
 
-require "rails/all"
+# Only the frameworks this application uses. Active Storage serves export
+# files through core, not through its own routes (BE-18, C4); Action Mailbox
+# and Action Text are not used.
+require "rails"
+require "active_model/railtie"
+require "active_job/railtie"
+require "active_record/railtie"
+require "active_storage/engine"
+require "action_controller/railtie"
+require "action_mailer/railtie"
+require "action_view/railtie"
+require "action_cable/engine"
 
 # Require the gems listed in Gemfile, including any gems
 # you've limited to :test, :development, or :production.
@@ -22,7 +33,7 @@ module RafeloTrials
     config.active_record.default_timezone = :utc
 
     if Rails.env.production? && ENV["SECRET_KEY_BASE_DUMMY"].blank?
-      if ENV["RAILS_MASTER_KEY"].blank? && ENV["SECRET_KEY_BASE"].blank?
+      if ENV["RAILS_MASTER_KEY"].blank?
         raise ActiveSupport::EncryptedFile::MissingKeyError.new(
           key_path: Rails.root.join("config/credentials/production.key"), env_key: "RAILS_MASTER_KEY"
         )

@@ -1,7 +1,10 @@
 import { Head } from "@inertiajs/react";
 
-import { HomeScreen } from "../../screens/home/home_screen";
-import type { LayoutName } from "../../lib/layout_name";
+import type { LayoutName } from "@/lib/layout_name";
+
+import { t } from "@/lib/i18n";
+import { HomeScreen } from "@/screens/home/home_screen";
+
 import { pageSchema } from "./index.schema";
 
 export default function HomeIndex(props: Record<string, unknown>) {
@@ -9,7 +12,7 @@ export default function HomeIndex(props: Record<string, unknown>) {
 
   return (
     <>
-      <Head title="RafeloTrials" />
+      <Head title={t("app:home.message")} />
       <HomeScreen message={page.data.message} />
     </>
   );

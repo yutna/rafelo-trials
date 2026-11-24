@@ -2,9 +2,6 @@
   "files": [],
   "references": [
     {
-      "path": "engines/billing"
-    },
-    {
       "path": "engines/core"
     },
     {

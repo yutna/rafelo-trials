@@ -6,6 +6,14 @@ module Rafelo
     # (OPS-04). Labels are allow-listed and never include viewer data.
     class Metrics
       BUCKETS = [ 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0 ].freeze
+      CSP_DIRECTIVES = %w[
+        base-uri child-src connect-src default-src font-src form-action frame-ancestors
+        frame-src img-src manifest-src media-src object-src prefetch-src report-to
+        report-uri require-trusted-types-for sandbox script-src script-src-attr
+        script-src-elem style-src style-src-attr style-src-elem trusted-types
+        upgrade-insecure-requests worker-src
+      ].freeze
+      CSP_ORIGINS = %w[inline eval self data: blob: about: javascript: unknown].freeze
 
       class << self
         def install!
@@ -20,7 +28,7 @@ module Rafelo
             )
           end
           ActiveSupport::Notifications.subscribe("upstream.call") do |_, started, finished, _, payload|
-            record_upstream(payload[:name].to_s, (finished - started))
+            record_upstream(payload[:name].to_s, (finished - started), gateway: payload[:gateway])
           end
           ActiveSupport::Notifications.subscribe("enqueue.active_job") do |_, _, _, _, payload|
             increment("rafelo_jobs_enqueued_total", { job: payload[:job].class.name })
@@ -38,6 +46,7 @@ module Rafelo
             @durations = Hash.new { |hash, key| hash[key] = { requests: 0, sum: 0.0, buckets: Hash.new(0) } }
             @upstream_calls = Hash.new(0)
             @upstream_time = Hash.new(0.0)
+            @circuits = {}
             @errors = Hash.new(0)
             @counters = Hash.new(0)
           end
@@ -55,13 +64,42 @@ module Rafelo
           end
         end
 
-        def record_upstream(name, seconds)
+        def record_upstream(name, seconds, gateway: nil)
           return if name.empty?
 
+          labels = { upstream: name.to_s }
+          labels[:gateway] = gateway.to_s if gateway.present?
           mutex.synchronize do
-            @upstream_calls[name] += 1
-            @upstream_time[name] += seconds
+            @upstream_calls[labels] += 1
+            @upstream_time[labels] += seconds
           end
+        end
+
+        def record_upstream_error(name, code, gateway: nil)
+          labels = { upstream: name.to_s, code: code.to_s }
+          labels[:gateway] = gateway.to_s if gateway.present?
+          increment("rafelo_upstream_errors_total", labels)
+        end
+
+        def circuit_state(name, gateway, state)
+          mutex.synchronize do
+            @circuits[[ name.to_s, gateway.to_s ]] = state.to_s
+          end
+        end
+
+        def circuit_open(name, gateway)
+          increment("rafelo_circuit_open_total", { upstream: name.to_s, gateway: gateway.to_s })
+        end
+
+        def bulkhead_refused(name)
+          increment("rafelo_bulkhead_refused_total", { upstream: name.to_s })
+        end
+
+        def csp_report(directive:, blocked_origin:)
+          increment("rafelo_csp_reports_total", {
+            directive: csp_directive(directive),
+            blocked_origin: csp_origin(blocked_origin)
+          })
         end
 
         def record_error(code)
@@ -81,19 +119,25 @@ module Rafelo
         end
 
         def text
-          mutex.synchronize do
-            lines = []
-            lines.concat(request_lines)
-            lines.concat(upstream_lines)
+          lines = mutex.synchronize do
+            collected = []
+            collected.concat(request_lines)
+            collected.concat(upstream_lines)
             @errors.each do |code, count|
-              lines << metric("rafelo_errors_total", { code: code }, count)
+              collected << metric("rafelo_errors_total", { code: code }, count)
             end
             @counters.each do |(name, labels), count|
-              lines << metric(name, labels, count)
+              collected << metric(name, labels, count)
             end
-            lines.concat(pool_lines)
-            lines.join("\n") + "\n"
+            collected.concat(circuit_lines)
+            collected
           end
+
+          lines.concat(process_lines)
+          lines.concat(pool_lines)
+          lines.concat(queue_lines)
+          lines.concat(table_health_lines)
+          lines.join("\n") + "\n"
         end
 
         private
@@ -115,11 +159,34 @@ module Rafelo
         end
 
         def upstream_lines
-          @upstream_calls.map do |name, count|
-            metric("rafelo_upstream_calls_total", { upstream: name }, count)
-          end + @upstream_time.map do |name, seconds|
-            metric("rafelo_upstream_duration_seconds_sum", { upstream: name }, seconds.round(6))
+          @upstream_calls.map do |labels, count|
+            metric("rafelo_upstream_calls_total", labels, count)
+          end + @upstream_time.map do |labels, seconds|
+            metric("rafelo_upstream_duration_seconds_sum", labels, seconds.round(6))
           end
+        end
+
+        def circuit_lines
+          @circuits.map do |(upstream, gateway), state|
+            metric(
+              "rafelo_circuit_state",
+              { upstream: upstream, gateway: gateway, state: state },
+              1,
+              type: "gauge"
+            )
+          end
+        end
+
+        def process_lines
+          identity = ProcessIdentity.to_h
+          [
+            metric(
+              "rafelo_process_info",
+              { host: identity[:host], pid: identity[:pid], role: identity[:role] },
+              1,
+              type: "gauge"
+            )
+          ]
         end
 
         def pool_lines
@@ -135,21 +202,68 @@ module Rafelo
           []
         end
 
-        def metric(name, labels, value, type: "counter")
+        def queue_lines
+          return [] unless defined?(SolidQueue::ReadyExecution) && ActiveRecord::Base.connected?
+
+          ready = SolidQueue::ReadyExecution
+          oldest = ready.minimum(:created_at)
+          latency = oldest ? (Time.current - oldest).round(3) : 0
+          [
+            metric("rafelo_jobs_ready", {}, ready.count, type: "gauge"),
+            metric("rafelo_jobs_ready_latency_seconds", {}, latency, type: "gauge")
+          ]
+        rescue StandardError
+          []
+        end
+
+        def table_health_lines
+          return [] unless defined?(ActiveRecord::Base) && ActiveRecord::Base.connected?
+
+          rows = ActiveRecord::Base.connection.select_all(<<~SQL)
+            SELECT relname, n_dead_tup, n_live_tup, n_tup_hot_upd, n_tup_upd
+            FROM pg_stat_user_tables
+            WHERE relname IN ('core_sessions', 'core_idempotency_keys', 'solid_queue_jobs')
+          SQL
+          rows.flat_map do |row|
+            live = row["n_live_tup"].to_i + row["n_dead_tup"].to_i
+            dead_ratio = live.zero? ? 0.0 : row["n_dead_tup"].to_f / live
+            updates = row["n_tup_upd"].to_i
+            hot_updates = row["n_tup_hot_upd"].to_i
+            hot_ratio = updates.zero? ? 0.0 : hot_updates.to_f / [ updates, hot_updates ].max
+            [
+              metric("rafelo_db_dead_tuple_ratio", { table: row["relname"] }, dead_ratio.round(4), type: "gauge"),
+              metric("rafelo_db_hot_update_ratio", { table: row["relname"] }, hot_ratio.round(4), type: "gauge")
+            ]
+          end
+        rescue StandardError
+          []
+        end
+
+        def csp_directive(value)
+          name = value.to_s.downcase.split.first.to_s
+          CSP_DIRECTIVES.include?(name) ? name : "other"
+        end
+
+        def csp_origin(value)
+          value = value.to_s.downcase
+          return value if CSP_ORIGINS.include?(value)
+          return "external" if value.start_with?("http://", "https://")
+
+          "other"
+        end
+
+        def metric(name, labels, value, type: nil)
           rendered = labels.map { |key, label| "#{key}=\"#{escape(label)}\"" }.join(",")
-          prefix = type == "histogram" ? "# TYPE #{name} histogram\n" : ""
           suffix = rendered.empty? ? name : "#{name}{#{rendered}}"
-          "#{prefix}#{suffix} #{value}"
+          "#{suffix} #{value}"
         end
 
         def escape(value)
-          value.to_s.gsub(/[\\"\n]/) do |character|
-            case character
-            when "\\" then "\\\\"
-            when '"' then '\\"'
-            when "\n" then "\\n"
-            end
-          end
+          value.to_s
+            .gsub("\\") { "\\\\" }
+            .gsub('"') { '\\"' }
+            .gsub("\n") { "\\n" }
+            .gsub(/[\x00-\x1f\x7f]/, "")
         end
 
         def mutex

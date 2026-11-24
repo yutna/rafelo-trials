@@ -22,7 +22,7 @@ module Rafelo
       def trace
         {
           requestId: @context.request_id.to_s,
-          traceId: Current.trace_id.to_s.presence || @context.request_id.to_s
+          traceId: @context.trace_id.to_s.presence || @context.request_id.to_s
         }
       end
 
@@ -46,6 +46,7 @@ module Rafelo
           locale: @context.locale.to_s,
           locales: Locales.available,
           localeHrefs: @context.urls.locale_hrefs(@request_path),
+          signInHref: @context.urls.app_path("/#{@context.locale}/sign_in"),
           timeZone: Time.zone.name
         }
       end

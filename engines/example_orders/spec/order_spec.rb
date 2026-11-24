@@ -1,6 +1,6 @@
 require_relative "rails_helper"
 
-RSpec.describe Rafelo::ExampleOrders::OrderForm do
+RSpec.describe RafeloTrials::ExampleOrders::OrderForm do
   it "accepts a known status and rejects a missing customer" do
     expect(described_class.new(customer_name: "Ada", status: "open")).to be_valid
     expect(described_class.new(customer_name: "", status: "open")).not_to be_valid
@@ -8,7 +8,7 @@ RSpec.describe Rafelo::ExampleOrders::OrderForm do
   end
 end
 
-RSpec.describe Rafelo::ExampleOrders::OrderPolicy do
+RSpec.describe RafeloTrials::ExampleOrders::OrderPolicy do
   let(:viewer) { Struct.new(:id, :name).new(7, "Ada") }
 
   it "allows export only with the export grant" do
@@ -21,7 +21,7 @@ RSpec.describe Rafelo::ExampleOrders::OrderPolicy do
   end
 end
 
-RSpec.describe Rafelo::ExampleOrders::OrdersGateway do
+RSpec.describe RafeloTrials::ExampleOrders::OrdersGateway do
   def gateway
     described_class.new(
       token_provider: Struct.new(:token, :service?).new("access", false),

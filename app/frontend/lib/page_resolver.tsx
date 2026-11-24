@@ -1,14 +1,15 @@
-import type { ComponentType, ReactNode } from "react";
+import { createElement, type ComponentType, type ReactNode } from "react";
 
-import { AppShell } from "../layouts/app_shell";
-import { AuthShell } from "../layouts/auth_shell";
-import { BareShell } from "../layouts/bare_shell";
-import { LayoutRoot } from "../layouts/layout_root";
-import { ErrorBoundary } from "@design_system/error_boundary";
-import { reportClientError, setPageContext } from "./report_client_error";
-import { t } from "./i18n";
+import { AppShell } from "@/layouts/app_shell";
+import { AuthShell } from "@/layouts/auth_shell";
+import { BareShell } from "@/layouts/bare_shell";
+import { LayoutRoot } from "@/layouts/layout_root";
+import { PageBoundary } from "@/layouts/page_boundary";
+
 import type { LayoutName } from "./layout_name";
-import { setLocale } from "./i18n";
+
+import { loadNamespaces, type CatalogLoader } from "./i18n";
+import { setPageContext } from "./report_client_error";
 
 type PageModule = { default: PageComponent };
 type PageComponent = ComponentType<Record<string, unknown>> & {
@@ -16,11 +17,23 @@ type PageComponent = ComponentType<Record<string, unknown>> & {
   layout?: (page: ReactNode) => ReactNode;
 };
 
-const appPageModules = import.meta.glob<PageModule>("../pages/**/*.tsx", {
+const appPageModules = import.meta.glob<PageModule>(
+  ["../pages/**/*.tsx", "!../pages/**/*.test.tsx", "!../pages/**/*.spec.tsx"],
+  { eager: false },
+);
+const enginePageModules = import.meta.glob<PageModule>(
+  [
+    "../../../engines/*/app/frontend/pages/**/*.tsx",
+    "!../../../engines/*/app/frontend/pages/**/*.test.tsx",
+    "!../../../engines/*/app/frontend/pages/**/*.spec.tsx",
+  ],
+  { eager: false },
+);
+const appCatalogModules = import.meta.glob<CatalogModule>("../locales/*.json", {
   eager: false,
 });
-const enginePageModules = import.meta.glob<PageModule>(
-  "../../../engines/*/app/frontend/pages/**/*.tsx",
+const engineCatalogModules = import.meta.glob<CatalogModule>(
+  "../../../engines/*/app/frontend/locales/*.json",
   { eager: false },
 );
 
@@ -43,14 +56,33 @@ const LAYOUTS: Record<LayoutName, (page: ReactNode) => ReactNode> = {
 };
 
 const pages = new Map<string, () => Promise<PageModule>>();
+const pageNamespaces = new Map<string, string>();
+const catalogs = new Map<string, CatalogLoader>();
 const compiled = new Map<string, PageComponent>();
 
+type CatalogModule = { default: Record<string, unknown> };
+
 function pageName(path: string): string {
-  return path.replace(/\.tsx$/, "").split("/pages/").at(-1) ?? "";
+  return (
+    path
+      .replace(/\.tsx$/, "")
+      .split("/pages/")
+      .at(-1) ?? ""
+  );
+}
+
+function localeName(path: string): string {
+  return (
+    path
+      .split("/")
+      .at(-1)
+      ?.replace(/\.json$/, "") ?? ""
+  );
 }
 
 for (const [path, load] of Object.entries(appPageModules)) {
   pages.set(pageName(path), load);
+  pageNamespaces.set(pageName(path), "app");
 }
 
 for (const [path, load] of Object.entries(enginePageModules)) {
@@ -59,6 +91,17 @@ for (const [path, load] of Object.entries(enginePageModules)) {
   const resource = pageName(path);
   if (!engine || !resource) continue;
   pages.set(`${engine}/${resource}`, load);
+  pageNamespaces.set(`${engine}/${resource}`, engine);
+}
+
+for (const [path, load] of Object.entries(appCatalogModules)) {
+  catalogs.set(`app:${localeName(path)}`, load);
+}
+
+for (const [path, load] of Object.entries(engineCatalogModules)) {
+  const engine = path.split("/engines/")[1]?.split("/")[0];
+  if (!engine) continue;
+  catalogs.set(`${engine}:${localeName(path)}`, load);
 }
 
 function withLayout(component: PageComponent, name: string): PageComponent {
@@ -66,28 +109,12 @@ function withLayout(component: PageComponent, name: string): PageComponent {
   if (cached) return cached;
 
   const layoutName = component.layoutName ?? "app";
-  const wrapper: PageComponent = (props) => {
-    const Page = component;
-    const trace = props.trace as { requestId?: string; traceId?: string } | undefined;
-    return (
-      <ErrorBoundary
-        testId="page.error"
-        title={t("app:errors.page_title")}
-        homeLabel={t("app:errors.go_home")}
-        retryLabel={t("app:errors.retry")}
-        homeHref="/"
-        resetKey={window.location.href}
-        requestId={trace?.requestId}
-        traceId={trace?.traceId}
-        reporter={reportClientError}
-      >
-        <Page {...props} />
-      </ErrorBoundary>
-    );
-  };
-  wrapper.layout = LAYOUTS[layoutName] ?? LAYOUTS.app;
-  compiled.set(name, wrapper);
-  return wrapper;
+  const Wrapper: PageComponent = (props) => (
+    <PageBoundary trace={props.trace}>{createElement(component, props)}</PageBoundary>
+  );
+  Wrapper.layout = LAYOUTS[layoutName] ?? LAYOUTS.app;
+  compiled.set(name, Wrapper);
+  return Wrapper;
 }
 
 export async function resolvePage(
@@ -100,9 +127,13 @@ export async function resolvePage(
     release: page?.version ?? undefined,
     trace: page?.props?.trace as { requestId?: string; traceId?: string } | undefined,
   });
-  await setLocale(app?.locale ?? "en");
   const load = pages.get(name);
   if (!load) throw new Error(`Page not found: ${name}`);
+
+  const namespace = pageNamespaces.get(name) ?? "app";
+  const namespaces = ["app", "core", "design_system"];
+  if (!namespaces.includes(namespace)) namespaces.push(namespace);
+  await loadNamespaces(namespaces, app?.locale ?? "en", catalogs);
 
   const module = await load();
   return withLayout(module.default, name);

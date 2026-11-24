@@ -1,4 +1,6 @@
 require "rails_helper"
+require "fileutils"
+require "json"
 require "tmpdir"
 require Rails.root.join("engines/core/lib/generators/rafelo/domain_generator")
 
@@ -10,8 +12,62 @@ RSpec.describe Rafelo::Generators::DomainGenerator do
       root = Pathname(dir)
       expect(root.join("engines/customers_probe/rafelo_trials_customers_probe.gemspec")).to exist
       expect(root.join("engines/customers_probe/app/frontend/domain/skeleton.test.ts")).to exist
+      expect(root.join("engines/customers_probe/app/frontend/forms")).to exist
+      expect(root.join("engines/customers_probe/app/frontend/hooks")).to exist
+      expect(root.join("engines/customers_probe/config/errors.yml")).to exist
+      expect(YAML.safe_load_file(root.join("engines/customers_probe/config/ratchets.yml"))).to eq(
+        "eslint_disable" => 0,
+        "rubocop_disable" => 0,
+        "use_no_memo" => 0,
+        "skipped_tests" => 0,
+        "page_budget_overrides" => 0,
+        "legacy_table_prefixes" => 0,
+        "legacy_constants" => 0
+      )
+      expect(root.join("engines/customers_probe/db/migrate/.keep")).to exist
+      engine = File.read(root.join("engines/customers_probe/lib/rafelo_trials/customers_probe/engine.rb"))
+      app_ns = Rails.application.class.module_parent_name.underscore
+      expect(engine).to include("#{app_ns}_customers_probe.migration_paths")
+      expect(engine).to include('app.config.paths["db/migrate"] << path')
+      expect(File.read(root.join("engines/customers_probe/vitest.config.mts"))).to include(
+        'root: fileURLToPath(new URL(".", import.meta.url))'
+      )
+      expect(YAML.safe_load_file(root.join("engines/customers_probe/config/locales/en.yml"))).to eq(
+        "en" => { "customers_probe" => {} }
+      )
+      expect(File.read(root.join("engines/customers_probe/spec/rails_helper.rb"))).to eq("require_relative \"../../../spec/rails_helper\"\n")
       expect(root.join("engines/customers_probe/config/routes.rb")).not_to exist
       expect(root.join("engines/customers_probe/lib/rafelo_trials/customers_probe/engine.rb").read).not_to include("Modules.register")
+      guide = File.read(root.join("engines/customers_probe/AGENTS.md"))
+      expect(guide).to include("framework-free", "no routes", "app/public/", "app/frontend/public/", "ARCH-09", "GEN-05")
+    end
+  end
+
+  it "restores the grant catalog when post-write fails after the sync" do
+    Dir.mktmpdir do |dir|
+      root = Pathname(dir)
+      grants = root.join("config/grants.json")
+      manifest = root.join("engines/existing/config/permissions.yml")
+      FileUtils.mkdir_p(grants.dirname)
+      FileUtils.mkdir_p(manifest.dirname)
+      File.write(grants, JSON.pretty_generate("grants" => [ "core:existing:read" ]) + "\n")
+      File.write(manifest, "existing:\n  widget:\n    - read\n")
+      before = File.read(grants)
+      synced = nil
+      generator = described_class.new([ "customers_probe" ], {}, destination_root: dir)
+
+      expect {
+        generator.send(:with_rollback) do
+          FileUtils.mkdir_p(generator.send(:root_path).join("engines/customers_probe"))
+          Rafelo::Generators::GrantCatalog.sync(generator.send(:root_path))
+          synced = File.read(grants)
+          raise "boom"
+        end
+      }.to raise_error(Thor::Error)
+
+      expect(synced).not_to eq(before)
+      expect(File.read(grants)).to eq(before)
+      expect(root.join("engines/customers_probe")).not_to exist
     end
   end
 end

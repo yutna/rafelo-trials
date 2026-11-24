@@ -12,6 +12,7 @@ module Rafelo
       Route = Data.define(:verb, :path, :to, :kind)
       SUPPORTED_KINDS = %w[dispatch mount legacy_redirect].freeze
       ALLOWED_MOUNTS = %w[ActionCable::Server::Base].freeze
+      DEVTOOLS_PREFIX = "/_inertia/devtools"
       SINGLE_VERB = /\A[A-Z]+\z/
 
       class << self
@@ -19,6 +20,8 @@ module Rafelo
           routes = []
           route_set.routes.each do |route|
             path = join(prefix, route.path.spec.to_s)
+            next if disabled_devtools?(path, route)
+
             app = unwrap(route.app)
             if engine?(app)
               if known_engines.nil? || known_engines.include?(app)
@@ -38,6 +41,7 @@ module Rafelo
           modules.flat_map do |entry|
             prefix = "/:locale#{entry.path}"
             routes = walk(entry.engine.routes, prefix: prefix)
+              .select { |route| module_route?(route, entry.engine) }
             routes + entry.legacy_paths.map do |old_prefix, _target|
               legacy = "#{old_prefix}(/*rest)"
               legacy = "/#{legacy}" unless legacy.start_with?("/")
@@ -108,6 +112,32 @@ module Rafelo
         end
 
         private
+
+        def disabled_devtools?(path, route)
+          return false unless path == DEVTOOLS_PREFIX || path.start_with?("#{DEVTOOLS_PREFIX}/")
+          return false unless route.defaults[:controller].to_s == "inertia_rails/devtools/entries"
+          return false unless defined?(InertiaRails::Devtools)
+
+          !InertiaRails::Devtools.enabled?
+        end
+
+        # A module owns only the routes whose controller belongs to its
+        # isolated namespace, plus its declared legacy redirects. A route
+        # mounted inside the engine by something else is not blessed by the
+        # registry entry.
+        def module_route?(route, engine)
+          return true if route.kind == "legacy_redirect"
+          return false unless route.kind == "dispatch"
+
+          controller = route.to.to_s.split("#", 2).first
+          prefix = engine_controller_prefix(engine)
+          controller == prefix || controller.start_with?("#{prefix}/")
+        end
+
+        def engine_controller_prefix(engine)
+          namespace = engine.respond_to?(:railtie_namespace) ? engine.railtie_namespace : engine
+          namespace.name.to_s.underscore
+        end
 
         def unwrap(app)
           app.respond_to?(:app) ? app.app : app

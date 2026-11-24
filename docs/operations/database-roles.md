@@ -3,10 +3,10 @@
 OPS-08 separates the role that owns and migrates the database from the role
 the application uses at runtime.
 
-| Role | Used by | Owns tables | Audit tables |
-| --- | --- | --- | --- |
-| `rafelo_trials_migrator` | `bin/rails db:prepare` in the entrypoint, migrations, the partition routine, backups | Yes | Owns them; may drop whole partitions for retention |
-| `rafelo_trials_runtime` | Puma, Solid Queue, consoles | No | `INSERT` and `SELECT` only: no `UPDATE`, `DELETE`, or `TRUNCATE` |
+| Role            | Used by                                                                              | Owns tables | Audit tables                                                     |
+| --------------- | ------------------------------------------------------------------------------------ | ----------- | ---------------------------------------------------------------- |
+| `rafelo_trials_migrator` | `bin/rails db:prepare` in the entrypoint, migrations, the partition routine, backups | Yes         | Owns them; may drop whole partitions for retention               |
+| `rafelo_trials_runtime`  | Puma, Solid Queue, consoles                                                          | No          | `INSERT` and `SELECT` only: no `UPDATE`, `DELETE`, or `TRUNCATE` |
 
 The runtime role cannot disable the append-only trigger without table
 ownership, and `TRUNCATE` bypasses row triggers, so it has no `TRUNCATE`
@@ -30,8 +30,10 @@ psql -v ON_ERROR_STOP=1 \
   -f script/ops/database_roles.sql
 ```
 
-The script is re-runnable. Run it before the first `db:prepare` on a fresh
-database, and before the first v0.19.0 deploy on an existing one. It creates
+The script is re-runnable. On a fresh single-host profile, boot the database
+accessory first (`bin/kamal accessory boot db`), then run it before the first
+`db:prepare`; on an existing database run it before the first v0.19.0 deploy.
+It creates
 the roles when they are missing, gives the migration role ownership of the
 tables and sequences that already exist (a pre-v0.19.0 database was created by
 the deploy superuser), grants the runtime role its DML, and applies the

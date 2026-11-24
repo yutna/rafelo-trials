@@ -1,2 +1,0 @@
-billing:
-  invoice: [read, create, delete]

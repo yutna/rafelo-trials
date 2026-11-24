@@ -3,10 +3,10 @@
 The template ships two Kamal profiles that run the same production image and
 code (OPS-06):
 
-| Profile | File | PostgreSQL | Active Storage | Solid Queue |
-| --- | --- | --- | --- | --- |
-| Single host (default) | `config/deploy.yml` | Kamal accessory on a named volume, or a managed service | Disk on the `rafelo_trials_storage` volume, or S3-compatible | In the web Puma process |
-| Multi host | `config/deploy.multi.yml` | Managed service shared by every host | S3-compatible | Separate `job` role (`bin/jobs`) |
+| Profile               | File                      | PostgreSQL                                              | Active Storage                                      | Solid Queue                      |
+| --------------------- | ------------------------- | ------------------------------------------------------- | --------------------------------------------------- | -------------------------------- |
+| Single host (default) | `config/deploy.yml`       | Kamal accessory on a named volume, or a managed service | Disk on the `rafelo_trials_storage` volume, or S3-compatible | In the web Puma process          |
+| Multi host            | `config/deploy.multi.yml` | Managed service shared by every host                    | S3-compatible                                       | Separate `job` role (`bin/jobs`) |
 
 Nothing else is host-local (ARCH-13). Request and job scratch files live in
 the container's temporary directories; data lives in PostgreSQL or Active
@@ -53,8 +53,9 @@ build and nightly (OPS-06).
   Active Storage service.
 
 Everything else is a clear value in the profile's `env.clear`: upstream base
-URLs, hosts, database host/name/users, pool sizes, and the Active Storage
-service. A missing credential fails boot, not the first sign-in. Create or
+URLs, hosts, database host/name/users, and the Active Storage service; the
+connection pool is computed from `RAILS_MAX_THREADS` in `config/database.yml`
+and checked by the BE-21 spec. A missing credential fails boot, not the first sign-in. Create or
 edit the production credentials with the production key:
 
 ```sh
@@ -66,8 +67,9 @@ real secret (SEC-07); re-encrypt it with the deployment's real secrets before
 the first deploy. The key that encrypts it now is the template's local
 `config/master.key`, which is not committed: an adopter who does not hold it
 deletes the file and creates a new one with `credentials:edit`. Put the key in `.kamal/secrets` through a password manager
-or the deploy environment; never commit it. The single-host PostgreSQL
-accessory also reads `POSTGRES_PASSWORD` from `.kamal/secrets`.
+or the deploy environment; never commit it, and never read it from
+`config/master.key`. The single-host PostgreSQL accessory also reads
+`POSTGRES_PASSWORD` from `.kamal/secrets`.
 
 Create the runtime and migration database roles before the first deploy (the
 accessory starts as the `postgres` superuser and creates no application role),
@@ -75,24 +77,40 @@ and put their passwords in the `database` credentials above. See
 [operations/database-roles.md](operations/database-roles.md) for the grants
 and the `psql` command. The entrypoint runs `db:prepare` as the migration role
 while the old release still serves (BE-22); the web server and the job role
-then connect as the runtime role.
+then connect as the runtime role. The production image installs
+`postgresql-client`, because `db:prepare` loads `structure.sql` with `psql`
+on the first deploy and on every restore (C2, OPS-06).
 
 ## Single host
 
 1. Edit `config/deploy.yml`: the host, registry, `RAILS_HOSTS`, upstream base
    URL, and the PostgreSQL accessory host.
 2. Provide `RAILS_MASTER_KEY` and `POSTGRES_PASSWORD` to `.kamal/secrets`.
-3. Deploy:
+3. Prepare the host and boot the database before the app:
 
-```sh
-bin/kamal setup
-bin/kamal deploy
-```
+   ```sh
+   bin/kamal server bootstrap
+   bin/kamal accessory boot db
+   ```
 
-The PostgreSQL accessory image is pinned by version and digest at the Dev
-Container's major version. A major upgrade is planned work (dump and restore,
-or `pg_upgrade`), never a tag bump. The web Puma process runs Solid Queue's
-supervisor because `SOLID_QUEUE_IN_PUMA` is set.
+4. Create the runtime and migration roles now, before any app container can
+   run `db:prepare`; use the `psql` command in
+   [operations/database-roles.md](operations/database-roles.md) against the
+   accessory, through its published port or `bin/kamal accessory exec db`.
+   Put the same passwords in the `database` credentials.
+5. Deploy:
+
+   ```sh
+   bin/kamal setup
+   bin/kamal deploy
+   ```
+
+`bin/kamal setup` skips the accessory that is already running and boots the
+app only after the roles exist. The PostgreSQL accessory image is pinned by
+version and digest at the Dev Container's major version. A major upgrade is
+planned work (dump and restore, or `pg_upgrade`), never a tag bump. The web
+Puma process runs Solid Queue's supervisor because `SOLID_QUEUE_IN_PUMA` is
+set.
 
 Useful aliases are defined in the profile:
 

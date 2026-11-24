@@ -45,6 +45,10 @@ jobs:
       run:
         working-directory: ${{ github.workspace }}
     needs: image
+    outputs:
+      mode: ${{ steps.select.outputs.mode }}
+      app: ${{ steps.select.outputs.app }}
+      engines: ${{ steps.select.outputs.engines }}
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.image.outputs.ref }}
@@ -58,9 +62,78 @@ jobs:
           fetch-depth: 0
 
       - name: Select affected applications and engines
+        id: select
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            script/ci/affected --all
+            script/ci/affected --all --format github >> "$GITHUB_OUTPUT"
+          else
+            # The tested merge commit against its first parent (11_workflow.md):
+            # never the event's base.sha, which a stale branch makes too old.
+            script/ci/affected --base HEAD^1
+            script/ci/affected --format github --base HEAD^1 >> "$GITHUB_OUTPUT"
+          fi
+
+  lockfile:
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    needs: [image, affected]
+    if: needs.affected.outputs.mode == 'lockfile'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.image.outputs.ref }}
+      options: --user root
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD~1' }}
-        run: script/ci/affected --base "$BASE_SHA"
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install gems
+        run: bundle check || bundle install
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Audit gems
+        run: bin/bundler-audit
+
+      - name: Audit npm packages
+        run: script/ci/npm_audit
+
+      - name: Typecheck frontend
+        run: npm run typecheck
+
+      - name: Prepare database
+        env:
+          RAILS_ENV: test
+          DB_HOST: postgres
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+        run: bin/rails db:prepare
+
+      - name: Run the app smoke suite
+        env:
+          RAILS_ENV: test
+          DB_HOST: postgres
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+        run: script/ci/e2e --project app
 
   actionlint:
     defaults:
@@ -127,7 +200,10 @@ jobs:
         run: npm ci
 
       - name: Scan for security vulnerabilities in JavaScript dependencies
-        run: npm audit --audit-level=high
+        run: script/ci/npm_audit
+
+      - name: Check the npm audit canary
+        run: script/ci/npm_audit_canary
 
   lint:
     defaults:
@@ -150,6 +226,9 @@ jobs:
       - name: Install gems
         run: bundle check || bundle install
 
+      - name: Install npm dependencies
+        run: npm ci
+
       - name: Prepare RuboCop cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         env:
@@ -163,11 +242,27 @@ jobs:
       - name: Lint code for consistent style
         run: bin/rubocop -f github
 
+      - name: Lint - ESLint and Prettier
+        run: npm run lint
+
+      - name: Lint - Prettier
+        run: npm run format:check
+
+      - name: Lint - canaries
+        run: script/ci/eslint_canary
+
+      - name: Lint - @apply
+        run: script/ci/apply_check
+
+      - name: Lint - @apply canary
+        run: script/ci/apply_check_canary
+
   test:
     defaults:
       run:
         working-directory: ${{ github.workspace }}
-    needs: image
+    needs: [image, affected]
+    if: needs.affected.outputs.mode != 'lockfile'
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.image.outputs.ref }}
@@ -223,7 +318,7 @@ jobs:
 
       - name: Check the release version
         env:
-          BASE_SHA: ${{ github.event.merge_group.base_sha || github.event.pull_request.base.sha || github.event.before }}
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || 'HEAD^1' }}
         run: script/ci/release_check
 
       - name: Check frontend boundaries
@@ -238,6 +333,7 @@ jobs:
         run: npm test
 
       - name: Run tests
+        if: needs.affected.outputs.app == 'true'
         env:
           RAILS_ENV: test
           DB_HOST: postgres
@@ -246,15 +342,14 @@ jobs:
         run: script/ci/rspec
 
       - name: Run engine specs
+        if: needs.affected.outputs.engines != ''
         env:
           RAILS_ENV: test
           DB_HOST: postgres
           DB_USER: postgres
           DB_PASSWORD: postgres
+          AFFECTED_ENGINES: ${{ needs.affected.outputs.engines }}
         run: script/ci/engine_specs
-
-      - name: Check page matcher coverage
-        run: npm run pages:check -- --matchers
 
   guards:
     defaults:
@@ -362,7 +457,8 @@ jobs:
     defaults:
       run:
         working-directory: ${{ github.workspace }}
-    needs: image
+    needs: [image, affected]
+    if: needs.affected.outputs.mode != 'lockfile'
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.image.outputs.ref }}
@@ -402,7 +498,8 @@ jobs:
     defaults:
       run:
         working-directory: ${{ github.workspace }}
-    needs: image
+    needs: [image, affected]
+    if: needs.affected.outputs.mode != 'lockfile'
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.image.outputs.ref }}
@@ -442,19 +539,41 @@ jobs:
         run: bin/rails db:prepare
 
       - name: Run design-system e2e
+        shell: bash
         env:
           RAILS_ENV: test
           DB_HOST: postgres
           DB_USER: postgres
           DB_PASSWORD: postgres
-        run: script/ci/e2e
-
+          AFFECTED_MODE: ${{ needs.affected.outputs.mode }}
+          AFFECTED_APP: ${{ needs.affected.outputs.app }}
+          AFFECTED_ENGINES: ${{ needs.affected.outputs.engines }}
+        run: |
+          args=()
+          if [ "$AFFECTED_MODE" = "narrow" ]; then
+            args=(--project design_system)
+          elif [ "$AFFECTED_APP" = "true" ] && [ -z "$AFFECTED_ENGINES" ]; then
+            args=(--project app)
+          elif [ "$AFFECTED_APP" = "false" ] && [ -n "$AFFECTED_ENGINES" ]; then
+            IFS=',' read -ra names <<< "$AFFECTED_ENGINES"
+            for name in "${names[@]}"; do
+              if [ -d "engines/$name/e2e" ]; then
+                args+=(--project "$name")
+              fi
+            done
+            if [ "${#args[@]}" -eq 0 ]; then
+              echo "affected: no engine e2e projects"
+              exit 0
+            fi
+          fi
+          script/ci/e2e "${args[@]}"
 
   examples-removable:
     defaults:
       run:
         working-directory: ${{ github.workspace }}
-    needs: image
+    needs: [image, affected]
+    if: needs.affected.outputs.mode != 'lockfile'
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.image.outputs.ref }}
@@ -496,7 +615,7 @@ jobs:
     defaults:
       run:
         working-directory: ${{ github.workspace }}
-    needs: image
+    needs: [image, affected]
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.image.outputs.ref }}
@@ -515,7 +634,7 @@ jobs:
         id: decide
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || 'HEAD^1' }}
         run: |
           set -euo pipefail
           run=false
@@ -524,8 +643,10 @@ jobs:
             run=true
             reason="run: $EVENT_NAME"
           elif [ -n "$BASE_SHA" ]; then
-            changed=$(git diff --name-only "$BASE_SHA" HEAD || true)
-            if echo "$changed" | grep -Eq '^(Dockerfile|\.dockerignore|Gemfile|Gemfile\.lock|.*\.gemspec|\.env\.ci\.production|config/credentials/dummy\.(key|yml\.enc))$'; then
+            if ! changed=$(git diff --name-only "$BASE_SHA" HEAD); then
+              run=true
+              reason="run: cannot read the change set"
+            elif echo "$changed" | grep -Eq '^(Dockerfile|\.dockerignore|Gemfile|Gemfile\.lock|package(-lock)?\.json|.*\.gemspec|\.env\.ci\.production|config/credentials/dummy\.(key|yml\.enc))$'; then
               run=true
               reason="run: production image inputs changed"
             fi
@@ -540,7 +661,7 @@ jobs:
     defaults:
       run:
         working-directory: ${{ github.workspace }}
-    needs: [image, production-image-needed]
+    needs: [image, affected, production-image-needed]
     if: needs.production-image-needed.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -553,7 +674,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1.338.0
+        uses: ruby/setup-ruby@be3c7df29b3349ec6bcfc6b4792f1cf9f5237d18 # v1.343.0
         with:
           bundler-cache: true
 
@@ -578,7 +699,8 @@ jobs:
     defaults:
       run:
         working-directory: ${{ github.workspace }}
-    needs: image
+    needs: [image, affected]
+    if: needs.affected.outputs.mode != 'lockfile'
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.image.outputs.ref }}
@@ -597,7 +719,7 @@ jobs:
         id: decide
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || 'HEAD^1' }}
         run: |
           set -euo pipefail
           run=false
@@ -606,8 +728,10 @@ jobs:
             run=true
             reason="run: $EVENT_NAME"
           elif [ -n "$BASE_SHA" ]; then
-            changed=$(git diff --name-only "$BASE_SHA" HEAD || true)
-            if echo "$changed" | grep -Eq '^(engines/core/lib/generators/|engines/core/app/.*/core/(modules|registry|page_context|urls|page_props)|engines/core/app/frontend/contracts/|engines/core/app/models/rafelo/core/page_props\.rb|config/routes\.rb|engines/.*/config/routes\.rb|script/ci/generator_smoke)'; then
+            if ! changed=$(git diff --name-only "$BASE_SHA" HEAD); then
+              run=true
+              reason="run: cannot read the change set"
+            elif echo "$changed" | grep -Eq '^(engines/core/lib/generators/|engines/core/app/.*/core/(modules|registry|page_context|urls|page_props)|engines/core/app/frontend/contracts/|engines/core/app/models/rafelo/core/page_props\.rb|config/routes\.rb|engines/.*/config/routes\.rb|script/ci/generator_smoke)'; then
               run=true
               reason="run: triggering paths changed"
             fi
@@ -622,8 +746,8 @@ jobs:
     defaults:
       run:
         working-directory: ${{ github.workspace }}
-    needs: [image, smoke-needed]
-    if: needs.smoke-needed.outputs.run == 'true'
+    needs: [image, affected, smoke-needed]
+    if: needs.affected.outputs.mode != 'lockfile' && needs.smoke-needed.outputs.run == 'true'
     runs-on: ubuntu-latest
     container:
       image: ${{ needs.image.outputs.ref }}
@@ -663,6 +787,76 @@ jobs:
           DB_PASSWORD: postgres
         run: script/ci/generator_smoke
 
+  gate:
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    needs: [image, affected]
+    if: needs.affected.outputs.mode != 'lockfile'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.image.outputs.ref }}
+      options: --user root
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_HOST: postgres
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # bin/ci requires config/boot before its own Setup step runs, so the
+      # bundle must exist first.
+      - name: Install gems
+        run: bundle check || bundle install
+
+      - name: Run the gate
+        run: bin/ci
+
+  touch-rate:
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    needs: image
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.image.outputs.ref }}
+      options: --user root
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Open an issue above the touch-rate budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: script/ci/touch_rate --open-issue
+
   ci-ok:
     defaults:
       run:
@@ -671,7 +865,28 @@ jobs:
     container:
       image: ${{ needs.image.outputs.ref }}
       options: --user root
-    needs: [image, affected, actionlint, scan_ruby, scan_js, lint, guards, canaries, test, examples-removable, concurrency, e2e, production-image-needed, production-image, smoke-needed, generator-smoke]
+    needs:
+      [
+        image,
+        affected,
+        lockfile,
+        actionlint,
+        scan_ruby,
+        scan_js,
+        lint,
+        guards,
+        canaries,
+        test,
+        gate,
+        examples-removable,
+        concurrency,
+        e2e,
+        production-image-needed,
+        production-image,
+        smoke-needed,
+        generator-smoke,
+        touch-rate,
+      ]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

@@ -25,6 +25,34 @@ RSpec.describe Rafelo::Core::ProductionRoutes do
     expect(walked.first.to).to eq("Fake::Engine")
   end
 
+  it "skips disabled devtools routes and keeps them when devtools is enabled" do
+    routes = ActionDispatch::Routing::RouteSet.new
+    routes.draw do
+      get "/_inertia/devtools/entries", to: "inertia_rails/devtools/entries#index"
+      get "/_inertia/devtools/fake", to: "other#show"
+    end
+
+    allow(InertiaRails::Devtools).to receive(:enabled?).and_return(false)
+    expect(described_class.walk(routes).map(&:path)).to eq([ "/_inertia/devtools/fake" ])
+
+    allow(InertiaRails::Devtools).to receive(:enabled?).and_return(true)
+    expect(described_class.walk(routes).map(&:path))
+      .to eq([ "/_inertia/devtools/entries", "/_inertia/devtools/fake" ])
+  end
+
+  it "derives only the module routes whose controller belongs to the engine" do
+    routes = ActionDispatch::Routing::RouteSet.new
+    routes.draw do
+      get "/orders", to: "adopter/orders#index"
+      get "/other", to: "other/things#index"
+    end
+    engine = double(routes: routes, railtie_namespace: double(name: "Adopter::Orders"))
+    entry = double(path: "/orders", engine: engine, legacy_paths: {})
+
+    expect(described_class.module_routes([ entry ]).map(&:to))
+      .to eq([ "adopter/orders#index" ])
+  end
+
   it "normalizes a legacy path to the locale-level redirect shape" do
     engine = double(routes: double(routes: []))
     entry = double(path: "/orders", engine: engine, legacy_paths: { "/invoicing" => "/orders" })

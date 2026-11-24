@@ -6,6 +6,7 @@ import {
   checkCitations,
   checkGenerated,
   checkMatrix,
+  checkPackConflicts,
   checkPaths,
   collectDefinitions,
   loadConfig,
@@ -13,7 +14,7 @@ import {
   rewriteGenerated,
   topicFiles,
   type Finding,
-  type PathSource
+  type PathSource,
 } from "./lib";
 
 const rootArg = process.argv.indexOf("--root");
@@ -49,14 +50,19 @@ const instructionText = readTextFiles(root, instructions);
 const generated = readFileSync(contractsPath, "utf8");
 
 const definitions = collectDefinitions(topicText);
-const matrix = checkMatrix(readTextFiles(root, ["docs/architecture/09_enforcement.md"])[0].text, definitions.definitions);
-const citations = checkCitations([ ...topicText, ...instructionText ], definitions.definitions);
+const matrix = checkMatrix(
+  readTextFiles(root, ["docs/architecture/09_enforcement.md"])[0].text,
+  definitions.definitions,
+);
+const citations = checkCitations([...topicText, ...instructionText], definitions.definitions);
+const rootGuide = instructionText.find(({ file }) => file === "AGENTS.md");
+const packConflicts = checkPackConflicts(rootGuide?.text ?? "");
 
 const sources: PathSource[] = [
   ...topicText.map(({ file, text }) => ({ file, text, kind: "topic" as const })),
-  ...instructionText.map(({ file, text }) => ({ file, text, kind: "instruction" as const }))
+  ...instructionText.map(({ file, text }) => ({ file, text, kind: "instruction" as const })),
 ];
-const paths = checkPaths(root, sources, config.deferred_paths);
+const paths = checkPaths(root, sources);
 if (paths.paths === 0) {
   fail("no repository path was found to check");
 }
@@ -67,17 +73,22 @@ const findings: Finding[] = [
   ...definitions.findings,
   ...matrix.findings,
   ...citations.findings,
+  ...packConflicts,
   ...paths.findings,
-  ...checkGenerated(generated)
+  ...checkGenerated(generated),
 ];
 
 if (findings.length > 0) {
-  findings.forEach((finding) => console.error(`docs: ${finding.file}${finding.line ? `:${finding.line}` : ""}: ${finding.message}`));
+  findings.forEach((finding) =>
+    console.error(
+      `docs: ${finding.file}${finding.line ? `:${finding.line}` : ""}: ${finding.message}`,
+    ),
+  );
   fail(`check found ${findings.length} finding(s)`);
 }
 
 console.log(
   `docs: checked ${topics.length} topic file(s), ${instructions.length} AI file(s), ` +
-  `${definitions.definitions.size} definition(s), ${matrix.rows} matrix row(s), ` +
-  `${citations.citations} citation(s), ${paths.paths} path(s); findings=0`
+    `${definitions.definitions.size} definition(s), ${matrix.rows} matrix row(s), ` +
+    `${citations.citations} citation(s), ${paths.paths} path(s); findings=0`,
 );

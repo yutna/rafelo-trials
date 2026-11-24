@@ -16,20 +16,24 @@ module Rafelo
       end
       self.transaction_baseline = 0
 
-      def self.for(name, config:, token_provider:, budget: nil, request_id: nil, trace_id: nil, trace_sampled: nil, deadline: nil, kind: :page)
+      def self.for(name, config:, token_provider:, budget: nil, request_id: nil, trace_id: nil,
+                   trace_sampled: false, session: nil, deadline: nil, kind: :page, gateway: nil)
         new(name: name, config: config, token_provider: token_provider, budget: budget,
             request_id: request_id, trace_id: trace_id, trace_sampled: trace_sampled,
-            deadline: deadline, kind: kind)
+            session: session, deadline: deadline, kind: kind, gateway: gateway)
       end
 
-      def initialize(name:, config:, token_provider:, budget: nil, request_id: nil, trace_id: nil, trace_sampled: nil, deadline: nil, kind: :page)
+      def initialize(name:, config:, token_provider:, budget: nil, request_id: nil, trace_id: nil,
+                     trace_sampled: false, session: nil, deadline: nil, kind: :page, gateway: nil)
         @name = name.to_sym
+        @gateway = gateway.to_s
         @config = config
         @token_provider = token_provider
         @budget = budget
         @request_id = request_id
         @trace_id = trace_id
-        @trace_sampled = trace_sampled.nil? ? Current.trace_sampled == true : trace_sampled
+        @trace_sampled = trace_sampled == true
+        @session = session
         @kind = kind.to_sym
         @deadline = deadline || RequestDeadline.new(Rails.application.config.x.requests.upstream_deadline_seconds)
         @breaker = Stoplight(name, threshold: config.breaker.fetch(:failure_threshold),
@@ -43,7 +47,7 @@ module Rafelo
         def bulkhead_for(name, limit)
           @bulkheads ||= {}
           @bulkhead_mutex ||= Mutex.new
-          @bulkhead_mutex.synchronize { @bulkheads[name] ||= Bulkhead.new(limit) }
+          @bulkhead_mutex.synchronize { @bulkheads[name] ||= Bulkhead.new(limit, name: name) }
         end
       end
 
@@ -73,8 +77,9 @@ module Rafelo
         ensure_no_transaction!
         raise ApplicationError.new("upstream.timeout") if @deadline.expired?
 
-        @budget&.consume!(@name)
-        ActiveSupport::Notifications.instrument("upstream.call", name: @name, kind: @kind)
+        @budget&.consume!(@name, kind: @kind)
+        Metrics.circuit_state(@name, @gateway, @breaker.color)
+        ActiveSupport::Notifications.instrument("upstream.call", name: @name, kind: @kind, gateway: @gateway)
         @calls += 1
         response = @bulkhead.call do
           @breaker.run do
@@ -85,11 +90,18 @@ module Rafelo
         map_status!(response)
         response
       rescue Stoplight::Error::RedLight
+        Metrics.circuit_open(@name, @gateway)
+        Metrics.record_upstream_error(@name, "upstream.circuit_open", gateway: @gateway)
         raise ApplicationError.new("upstream.circuit_open")
       rescue Faraday::TimeoutError
+        Metrics.record_upstream_error(@name, "upstream.timeout", gateway: @gateway)
         raise ApplicationError.new("upstream.timeout")
       rescue Faraday::ConnectionFailed
+        Metrics.record_upstream_error(@name, "upstream.unavailable", gateway: @gateway)
         raise ApplicationError.new("upstream.unavailable")
+      rescue ApplicationError => error
+        Metrics.record_upstream_error(@name, error.code, gateway: @gateway)
+        raise
       end
 
       # Streams a body only after the first response callback has checked the
@@ -101,8 +113,9 @@ module Rafelo
         raise ApplicationError.new("upstream.timeout") if @deadline.expired?
 
         limit = max_bytes || @config.max_response_bytes
-        @budget&.consume!(@name)
-        ActiveSupport::Notifications.instrument("upstream.call", name: @name, kind: @kind)
+        @budget&.consume!(@name, kind: @kind)
+        Metrics.circuit_state(@name, @gateway, @breaker.color)
+        ActiveSupport::Notifications.instrument("upstream.call", name: @name, kind: @kind, gateway: @gateway)
         @calls += 1
         first = true
         total = 0
@@ -131,11 +144,18 @@ module Rafelo
         end
         total
       rescue Stoplight::Error::RedLight
+        Metrics.circuit_open(@name, @gateway)
+        Metrics.record_upstream_error(@name, "upstream.circuit_open", gateway: @gateway)
         raise ApplicationError.new("upstream.circuit_open")
       rescue Faraday::TimeoutError
+        Metrics.record_upstream_error(@name, "upstream.timeout", gateway: @gateway)
         raise ApplicationError.new("upstream.timeout")
       rescue Faraday::ConnectionFailed
+        Metrics.record_upstream_error(@name, "upstream.unavailable", gateway: @gateway)
         raise ApplicationError.new("upstream.unavailable")
+      rescue ApplicationError => error
+        Metrics.record_upstream_error(@name, error.code, gateway: @gateway)
+        raise
       end
 
       private
@@ -280,7 +300,7 @@ module Rafelo
         when 200..299, 304 then return response
         when 401 then "auth.expired"
         when 403
-          Current.session&.mark_grants_stale!
+          @session&.mark_grants_stale!
           "auth.forbidden"
         when 404, 410 then "resource.not_found"
         when 409, 412 then "resource.conflict"

@@ -36,6 +36,8 @@ RSpec.describe "Example orders", type: :request do
     expect(response).to be_within_props_budget("example_orders/orders/index")
     expect(response).to have_resolvable_hrefs("example_orders/orders/index")
     expect(response).to match_policy_capabilities("example_orders/orders/index")
+    expect(page_body.dig("props", "nav").select { |entry| entry["current"] }.map { |entry| entry["key"] })
+      .to eq([ "example_orders" ])
   end
 
   it "renders the show page" do
@@ -106,7 +108,7 @@ RSpec.describe "Example orders", type: :request do
     expect(response.location).to end_with("/en/example_orders/orders/order-101")
     expect(Rafelo::Core::IdempotencyKey.count).to eq(1)
     event = Rafelo::Core::AuditEvent.where(event: "write", outcome: "success").last
-    expect(event.resource).to eq("rafelo/example_orders/orders")
+    expect(event.resource).to eq("rafelo_trials/example_orders/orders")
     expect(event.action).to eq("create")
     expect(event.upstream_id).to eq("order-101")
   end
@@ -140,7 +142,7 @@ RSpec.describe "Example orders", type: :request do
     expect(response).to have_http_status(:see_other)
     expect(Rafelo::Core::Export.where(viewer_id: "7").count).to eq(1)
     expect(ActiveJob::Base.queue_adapter.enqueued_jobs.map { |job| job[:job] })
-      .to include(Rafelo::ExampleOrders::OrderExportJob)
+      .to include(RafeloTrials::ExampleOrders::OrderExportJob)
   ensure
     ActiveJob::Base.queue_adapter.enqueued_jobs.clear
   end

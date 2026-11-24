@@ -27,7 +27,6 @@ RSpec.describe Rafelo::Core::BaseController do
       [
         "before:verify_authenticity_token",
         "after:verify_same_origin_request",
-        "around:action_text/engine.rb",
         "before:inertia_rails/controller.rb",
         "after:inertia_rails/controller.rb",
         "before:action_controller/metal/allow_browser.rb",
@@ -79,19 +78,33 @@ RSpec.describe Rafelo::Core::BaseController do
   it "builds a gateway with the current token provider and budget" do
     Rafelo::Core::Current.token_provider = Struct.new(:token, :service?).new("secret", false)
     Rafelo::Core::Current.call_budget = Rafelo::Core::CallBudget.new(api: 2)
-    gateway = ApplicationController.new.gateway(ExampleInvoicesGateway)
+    controller = ApplicationController.new
+    allow(controller).to receive(:pundit_policy_authorized?).and_return(true)
+    gateway = controller.gateway(ExampleInvoicesGateway)
 
     expect(gateway.client).to be_a(Rafelo::Core::UpstreamClient)
     expect(gateway.budget.count(:api)).to eq(0)
+    expect(gateway.budget.deadline).to be(controller.request_deadline)
+    expect(controller.request_deadline).to be(controller.request_deadline)
   ensure
     Rafelo::Core::Current.token_provider = nil
     Rafelo::Core::Current.call_budget = nil
   end
 
+  it "refuses a gateway before authorization" do
+    controller = ApplicationController.new
+    allow(controller).to receive(:pundit_policy_authorized?).and_return(false)
+
+    expect { controller.gateway(ExampleInvoicesGateway) }.to raise_error(Pundit::NotAuthorizedError)
+  end
+
   it "builds a page context through the factory" do
     urls = Rafelo::Core::Urls.new(locale: :en, router: double("router"))
     context = Rafelo::Core::PageContextFactory.build(
-      session: nil,
+      viewer: nil,
+      permissions: nil,
+      trace_id: nil,
+      session_id: nil,
       flags: { search: true },
       locale: :en,
       request_id: "request-1",

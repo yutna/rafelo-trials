@@ -7,7 +7,7 @@
 service: rafelo_trials
 
 # The first host runs db:prepare before /up; size this for boot migrations.
-deploy_timeout: 120
+deploy_timeout: 180
 
 # One host at a time; the first runs db:prepare before the next boots.
 boot:
@@ -59,6 +59,7 @@ env:
     RAILS_MAX_THREADS: 5
     WEB_CONCURRENCY: 2
     JOB_CONCURRENCY: 1
+    KAMAL_ROLE: web
 
 # Aliases are triggered with "bin/kamal <alias>". You can overwrite arguments on invocation:
 # "bin/kamal logs -r job" will tail logs from the first server in the job section.

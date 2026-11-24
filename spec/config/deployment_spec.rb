@@ -69,12 +69,20 @@ RSpec.describe "Deployment profiles" do
   end
 
   it "rebuilds the Dev Container image when a pinned input changes" do
-    workflow = File.read(Rails.root.join(".github/workflows/devcontainer.yml"))
+    paths = %w[
+      .github/workflows/devcontainer.yml
+      template/.github/workflows/devcontainer.yml
+    ].select { |path| Rails.root.join(path).file? }
+    expect(paths).to include(".github/workflows/devcontainer.yml")
 
-    %w[mise.toml package.json package-lock.json].each do |path|
-      expect(workflow).to include(%(- "#{path}"))
+    paths.each do |path|
+      workflow = File.read(Rails.root.join(path))
+
+      %w[mise.toml .ruby-version package.json package-lock.json].each do |input|
+        expect(workflow).to include(%(- "#{input}"))
+      end
+      expect(workflow).to include(%(- "!.devcontainer/image_digest"))
     end
-    expect(workflow).to include(%(- "!.devcontainer/image_digest"))
   end
 
   it "describes a multi-host profile on the same image and code with managed services" do
@@ -130,6 +138,20 @@ RSpec.describe "Deployment profiles" do
 
     expect(dockerfile).to match(/^CMD \["\.\/bin\/thrust", "\.\/bin\/rails", "server"\]$/)
     expect(dockerfile).to match(/^EXPOSE 80$/)
+  end
+
+  it "boots the database and creates roles before the app on the first deploy" do
+    section = File.read(Rails.root.join("docs/deployment.md"))[/^## Single host.*?(?=^## )/m]
+    commands = [
+      "bin/kamal server bootstrap",
+      "bin/kamal accessory boot db",
+      "operations/database-roles.md",
+      "bin/kamal setup"
+    ]
+
+    positions = commands.map { |command| section.index(command) }
+    expect(positions).to all(be_a(Integer))
+    expect(positions).to eq(positions.sort)
   end
 
   it "passes the deploy preflight" do

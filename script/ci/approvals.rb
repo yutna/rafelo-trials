@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
 require "json"
+require "net/http"
 require "open3"
+require "uri"
 
 # Shared CODEOWNERS and review readers for the pull request checks (WF-03).
 module Approvals
@@ -9,12 +11,27 @@ module Approvals
 
   module_function
 
-  def codeowners(root)
+  # CODEOWNERS is read from the merge base when one is given, so a pull
+  # request cannot remove its own guard path or add an owner to approve
+  # itself (WF-03).
+  def codeowners(root, base: nil)
+    if base && !base.to_s.empty?
+      %w[.github/CODEOWNERS CODEOWNERS].each do |candidate|
+        output, status = Open3.capture2("git", "-C", root, "show", "#{base}:#{candidate}", err: File::NULL)
+        return parse_codeowners(output) if status.success?
+      end
+      return []
+    end
+
     path = File.join(root, ".github", "CODEOWNERS")
     path = File.join(root, "CODEOWNERS") unless File.file?(path)
     return [] unless File.file?(path)
 
-    File.readlines(path, chomp: true).filter_map do |line|
+    parse_codeowners(File.read(path))
+  end
+
+  def parse_codeowners(text)
+    text.lines(chomp: true).filter_map do |line|
       stripped = line.strip
       next if stripped.empty? || stripped.start_with?("#")
 
@@ -25,8 +42,8 @@ module Approvals
     end
   end
 
-  def owner_logins(root)
-    codeowners(root).flat_map { |entry| entry[:owners] }.uniq
+  def owner_logins(root, base: nil)
+    codeowners(root, base: base).flat_map { |entry| entry[:owners] }.uniq
   end
 
   def normalize(pattern)
@@ -43,10 +60,10 @@ module Approvals
     File.fnmatch?(normalized, path, File::FNM_PATHNAME | File::FNM_EXTGLOB | File::FNM_DOTMATCH)
   end
 
-  def guard_entry?(root, path)
+  def guard_entry?(root, path, base: nil)
     return false if ratchet_file?(path)
 
-    codeowners(root).any? { |entry| match?(entry[:pattern], path) }
+    codeowners(root, base: base).any? { |entry| match?(entry[:pattern], path) }
   end
 
   def ratchet_file?(path)
@@ -55,7 +72,8 @@ module Approvals
   end
 
   def changed_files(root, base)
-    output, status = Open3.capture2("git", "-C", root, "diff", "--name-only", "#{base}...HEAD")
+    # Rename detection would hide a guard file moved to an unguarded path.
+    output, status = Open3.capture2("git", "-C", root, "diff", "--name-only", "--no-renames", "#{base}...HEAD")
     abort "approvals: git diff failed for base #{base}" unless status.success?
 
     output.lines.map(&:strip).reject(&:empty?)
@@ -67,12 +85,10 @@ module Approvals
     abort "approvals: PR_NUMBER or HEAD_REF is required to read reviews" if pr.nil? || pr.to_s.empty?
     abort "approvals: GITHUB_REPOSITORY is required to read reviews" if repository.to_s.empty?
 
-    output, status = Open3.capture2(
-      "gh", "api", "--paginate", "repos/#{repository}/pulls/#{pr}/reviews"
-    )
-    abort "approvals: gh api failed for pull request #{pr}" unless status.success?
-
-    JSON.parse(output)
+    api_get("/repos/#{repository}/pulls/#{pr}/reviews?per_page=100") do |path|
+      output, status = Open3.capture2("gh", "api", "--paginate", "--slurp", path, err: File::NULL)
+      JSON.parse(output).flatten(1) if status.success?
+    end
   end
 
   def latest_states(reviews)
@@ -87,12 +103,73 @@ module Approvals
     end
   end
 
-  def approved_by_owner?(root, reviews)
-    owners = owner_logins(root)
+  # An approval counts only when its author is not the pull request author
+  # (WF-03): an agent or owner cannot approve its own change.
+  def pull_request_author(repository:, number:)
+    return if repository.to_s.empty? || number.to_s.empty?
+
+    value = api_get("/repos/#{repository}/pulls/#{number}") do |path|
+      output, status = Open3.capture2("gh", "api", path, "--jq", ".user.login", err: File::NULL)
+      output.strip if status.success?
+    end
+    value.is_a?(Hash) ? value.dig("user", "login") : value
+  end
+
+  # CI has no pull-request permission by default. Use the authenticated gh
+  # client when it works, then the public API (the check fails closed if the
+  # repository is private and no token is available).
+  def api_get(path)
+    value = begin
+      yield(path)
+    rescue Errno::ENOENT
+      nil
+    end
+    return value unless value.nil?
+
+    public_api_get(path)
+  rescue JSON::ParserError
+    abort "approvals: GitHub API returned invalid JSON for #{path}"
+  end
+
+  def public_api_get(path)
+    results = []
+    page = 1
+    loop do
+      separator = path.include?("?") ? "&" : "?"
+      uri = URI("https://api.github.com#{path}#{separator}per_page=100&page=#{page}")
+      response = Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 5, read_timeout: 10) do |http|
+        request = Net::HTTP::Get.new(uri)
+        request["Accept"] = "application/vnd.github+json"
+        request["User-Agent"] = "rafelo-ci"
+        http.request(request)
+      end
+      abort "approvals: GitHub API failed for #{path}" unless response.is_a?(Net::HTTPSuccess)
+
+      body = JSON.parse(response.body)
+      return body unless body.is_a?(Array)
+
+      results.concat(body)
+      break unless response["link"].to_s.include?('rel="next"')
+
+      page += 1
+    end
+    results
+  end
+
+  def approved_by_owner?(root, reviews, base: nil, author: nil)
+    owners = owner_logins(root, base: base)
     states = latest_states(reviews)
     return false if states.values.include?("CHANGES_REQUESTED")
 
-    states.any? { |login, state| state == "APPROVED" && owners.include?(login) }
+    author = author.to_s.strip.downcase
+    return false if author.empty?
+
+    states.any? do |login, state|
+      next false unless state == "APPROVED"
+      next false unless owners.any? { |owner| owner.casecmp?(login) }
+
+      !login.casecmp?(author)
+    end
   end
 
   def pull_request_number(pr, head_ref)

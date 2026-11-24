@@ -23,7 +23,12 @@ RSpec.describe "Metrics endpoint", type: :request do
     Rafelo::Core::Metrics.token_refresh(success: true)
     Rafelo::Core::Metrics.token_refresh(success: false)
     Rafelo::Core::Metrics.grants_dropped(2)
-    Rafelo::Core::Metrics.record_upstream("api", 0.25)
+    Rafelo::Core::Metrics.record_upstream("api", 0.25, gateway: "OrdersGateway")
+    Rafelo::Core::Metrics.record_upstream_error("api", "upstream.timeout", gateway: "OrdersGateway")
+    Rafelo::Core::Metrics.circuit_state("api", "OrdersGateway", "red")
+    Rafelo::Core::Metrics.circuit_open("api", "OrdersGateway")
+    Rafelo::Core::Metrics.bulkhead_refused("api")
+    Rafelo::Core::Metrics.csp_report(directive: "script-src", blocked_origin: "https://evil.test")
 
     get "/core/metrics"
     body = response.body
@@ -32,10 +37,46 @@ RSpec.describe "Metrics endpoint", type: :request do
     expect(body).to include("rafelo_token_refreshes_total 1")
     expect(body).to include("rafelo_token_refresh_failures_total 1")
     expect(body).to include("rafelo_grants_dropped_total 2")
-    expect(body).to include('rafelo_upstream_calls_total{upstream="api"} 1')
-    expect(body).to include('rafelo_upstream_duration_seconds_sum{upstream="api"} 0.25')
+    expect(body).to include('rafelo_upstream_calls_total{upstream="api",gateway="OrdersGateway"} 1')
+    expect(body).to include('rafelo_upstream_duration_seconds_sum{upstream="api",gateway="OrdersGateway"} 0.25')
+    expect(body).to include('rafelo_upstream_errors_total{code="upstream.timeout",gateway="OrdersGateway",upstream="api"} 1')
+    expect(body).to include('rafelo_circuit_state{upstream="api",gateway="OrdersGateway",state="red"} 1')
+    expect(body).to include('rafelo_circuit_open_total{gateway="OrdersGateway",upstream="api"} 1')
+    expect(body).to include('rafelo_bulkhead_refused_total{upstream="api"} 1')
+    expect(body).to include('rafelo_csp_reports_total{blocked_origin="external",directive="script-src"} 1')
+    expect(body).to include("rafelo_jobs_ready")
+    expect(body).to include('rafelo_db_dead_tuple_ratio{table="core_sessions"}')
 
     label_names = body.scan(/(\w+)="/).flatten.uniq
-    expect(label_names - %w[controller action status upstream code job le]).to be_empty
+    expect(label_names - %w[controller action status upstream gateway code job le host pid role state directive blocked_origin table]).to be_empty
+  end
+
+  it "publishes the process identity as an OPS-04 metric" do
+    identity = Rafelo::Core::ProcessIdentity.to_h
+
+    get "/core/metrics"
+
+    expect(response.body).to include(
+      %(rafelo_process_info{host="#{identity[:host]}",pid="#{identity[:pid]}",role="#{identity[:role]}"} 1)
+    )
+  end
+
+  it "escapes backslashes and drops control characters from labels" do
+    Rafelo::Core::Metrics.record_upstream("a\\b\r", 0.1)
+
+    get "/core/metrics"
+
+    expect(response.body).to include('upstream="a\\\\b"')
+    expect(response.body).not_to include("\r")
+  end
+
+  it "throttles scrapes per IP" do
+    12.times do
+      get "/core/metrics"
+      expect(response).to have_http_status(:ok)
+    end
+
+    get "/core/metrics"
+    expect(response).to have_http_status(:too_many_requests)
   end
 end

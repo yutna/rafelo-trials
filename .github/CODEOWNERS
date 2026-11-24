@@ -5,54 +5,54 @@
 # owner's approval, and a fall lands through a pull request.
 
 # Kernel
-/engines/core/                           @yutna
-/engines/design_system/                  @yutna
+/engines/core/                           @OWNER
+/engines/design_system/                  @OWNER
 
 # The root package declares the application's engine dependencies.
-/package.yml                             @yutna
+/package.yml                             @OWNER
 
 # Configuration guards
-/config/budgets.yml                      @yutna
-/config/ci.rb                            @yutna
-/config/contracts/_shared.json           @yutna
-/config/database.yml                     @yutna
-/config/deploy.yml                       @yutna
-/config/deploy.multi.yml                 @yutna
-/config/errors.yml                       @yutna
-/config/locales.yml                      @yutna
-/config/permission_mapping.yml           @yutna
-/config/production_routes.yml            @yutna
-/config/puma.rb                          @yutna
-/config/queue.yml                        @yutna
-/config/routes.rb                        @yutna
-/config/upstreams.yml                    @yutna
-/config/environments/                    @yutna
-/config/initializers/                    @yutna
+/config/budgets.yml                      @OWNER
+/config/ci.rb                            @OWNER
+/config/contracts/_shared.json           @OWNER
+/config/database.yml                     @OWNER
+/config/deploy.yml                       @OWNER
+/config/deploy.multi.yml                 @OWNER
+/config/errors.yml                       @OWNER
+/config/locales.yml                      @OWNER
+/config/permission_mapping.yml           @OWNER
+/config/production_routes.yml            @OWNER
+/config/puma.rb                          @OWNER
+/config/queue.yml                        @OWNER
+/config/routes.rb                        @OWNER
+/config/upstreams.yml                    @OWNER
+/config/environments/                    @OWNER
+/config/initializers/                    @OWNER
 
 # Engine manifests and canary fixtures are guard files.
-/engines/*/package.yml                   @yutna
-/spec/enforcement/                       @yutna
+/engines/*/package.yml                   @OWNER
+/spec/enforcement/                       @OWNER
 
 # Scripts, CI, and the image definition
-/script/                                 @yutna
-/bin/                                    @yutna
-/.github/CODEOWNERS                      @yutna
-/.github/workflows/                      @yutna
-/.github/rulesets/                       @yutna
-/.devcontainer/                          @yutna
-/Dockerfile                              @yutna
-/.dockerignore                           @yutna
+/script/                                 @OWNER
+/bin/                                    @OWNER
+/.github/CODEOWNERS                      @OWNER
+/.github/workflows/                      @OWNER
+/.github/rulesets/                       @OWNER
+/.devcontainer/                          @OWNER
+/Dockerfile                              @OWNER
+/.dockerignore                           @OWNER
 
 # Dependency and lint guards
-/Gemfile                                 @yutna
-/Gemfile.lock                            @yutna
-/package.json                            @yutna
-/package-lock.json                       @yutna
-/.npmrc                                  @yutna
-/.rubocop.yml                            @yutna
-/.dependency-cruiser.cjs                 @yutna
-/eslint.config.mjs                      @yutna
-/packwerk.yml                            @yutna
-/renovate.json5                          @yutna
-/mise.toml                               @yutna
-/.ruby-version                           @yutna
+/Gemfile                                 @OWNER
+/Gemfile.lock                            @OWNER
+/package.json                            @OWNER
+/package-lock.json                       @OWNER
+/.npmrc                                  @OWNER
+/.rubocop.yml                            @OWNER
+/.dependency-cruiser.cjs                 @OWNER
+/eslint.config.mjs                      @OWNER
+/packwerk.yml                            @OWNER
+/renovate.json5                          @OWNER
+/mise.toml                               @OWNER
+/.ruby-version                           @OWNER

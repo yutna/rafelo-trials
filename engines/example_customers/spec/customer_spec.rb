@@ -1,6 +1,6 @@
 require_relative "rails_helper"
 
-RSpec.describe Rafelo::ExampleCustomers::Customer do
+RSpec.describe RafeloTrials::ExampleCustomers::Customer do
   it "is an immutable public value object" do
     customer = described_class.new(id: "7", name: "Ada", tier: "gold")
 
@@ -9,7 +9,7 @@ RSpec.describe Rafelo::ExampleCustomers::Customer do
   end
 end
 
-RSpec.describe Rafelo::ExampleCustomers::CustomersGateway do
+RSpec.describe RafeloTrials::ExampleCustomers::CustomersGateway do
   it "maps an upstream customer into the public value object" do
     stub_request(:get, "http://localhost:4000/customers/7")
       .to_return(status: 200, body: { data: { id: 7, name: "Ada", tier: "gold" } }.to_json,
@@ -23,6 +23,6 @@ RSpec.describe Rafelo::ExampleCustomers::CustomersGateway do
 
     customer = gateway.find("7")
 
-    expect(customer).to eq(Rafelo::ExampleCustomers::Customer.new(id: "7", name: "Ada", tier: "gold"))
+    expect(customer).to eq(RafeloTrials::ExampleCustomers::Customer.new(id: "7", name: "Ada", tier: "gold"))
   end
 end

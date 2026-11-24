@@ -39,7 +39,11 @@ module Rafelo
         Rails.error.report(
           DefaultPartitionOccupied.new("#{DEFAULT_TABLE} holds #{rows} audit rows"),
           handled: false,
-          context: { rows: rows }
+          context: {
+            partition: DEFAULT_TABLE,
+            database_role: @connection.select_value("SELECT current_user").to_s,
+            rows: rows
+          }
         )
         true
       end
@@ -82,7 +86,7 @@ module Rafelo
 
         quoted_role = @connection.quote_table_name(role)
         exists = @connection.select_value("SELECT 1 FROM pg_roles WHERE rolname = #{@connection.quote(role)}")
-        return false unless exists
+        raise "audit runtime role #{role} does not exist" unless exists
 
         names = [ TABLE, DEFAULT_TABLE ] + partitions.keys
         names << "core_audits" if @connection.table_exists?("core_audits")
@@ -104,20 +108,26 @@ module Rafelo
       end
 
       def create_month!(month)
-        name = "core_audit_events_#{month.strftime("%Y_%m")}"
+        name = "core_audit_events_#{partition_key(month)}"
         @connection.execute(<<~SQL)
           CREATE TABLE IF NOT EXISTS #{name}
             PARTITION OF #{TABLE}
-            FOR VALUES FROM ('#{month.strftime("%Y-%m-%d")}') TO ('#{month.next_month.strftime("%Y-%m-%d")}')
+            FOR VALUES FROM ('#{partition_date(month)}') TO ('#{partition_date(month.next_month)}')
         SQL
       rescue ActiveRecord::StatementInvalid => error
         if error.cause.is_a?(PG::CheckViolation) && default_rows.positive?
           alert_default!
-          raise DefaultPartitionOccupied, "#{DEFAULT_TABLE} holds rows for #{month.strftime("%Y-%m")}: #{error.message}"
+          raise DefaultPartitionOccupied, "#{DEFAULT_TABLE} holds rows for #{partition_label(month)}: #{error.message}"
         end
 
         raise
       end
+
+      # ISO-shaped names, not user-facing dates; the presentation cop only
+      # allows DateFormatter for those.
+      def partition_key(month) = format("%04d_%02d", month.year, month.month)
+      def partition_date(month) = format("%04d-%02d-%02d", month.year, month.month, month.day)
+      def partition_label(month) = format("%04d-%02d", month.year, month.month)
     end
   end
 end

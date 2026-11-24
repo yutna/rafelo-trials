@@ -118,7 +118,6 @@ generated from the Renovate rules by `npm run docs:generate`, and
 | `typescript` | 6.0.3 | `typescript-eslint` 8.72.1 supports TypeScript below 6.1 |
 | `eslint`, `@eslint/js` | 9.39.5 | `eslint-plugin-react` and `eslint-plugin-jsx-a11y` do not support ESLint 10 yet |
 | `eslint-plugin-unicorn` | 65.0.1 | Version 79 requires ESLint 10.4 or newer |
-| `@tanstack/react-table` | 8.21.3 | Version 9 is a new major; migrate in its own pull request |
 | `@babel/core` | 7.29.13 | Used only to run React Compiler through `@rolldown/plugin-babel`; Babel 8 support in the compiler plugin is unverified |
 <!-- generated:held-back:end -->
 
@@ -227,7 +226,7 @@ end
   "dependencies": {
     "@inertiajs/react": "3.11.0",
     "@internationalized/date": "3.12.4",
-    "@tanstack/react-table": "8.21.3",
+    "@tanstack/react-table": "9.3.1",
     "echarts": "6.1.0",
     "i18next": "27.0.1",
     "lucide-react": "1.70.0",
@@ -356,7 +355,7 @@ the rule it serves.
    # on the host: the only command that runs outside the Dev Container
    docker run --rm -it --user "$(id -u):$(id -g)" -e HOME=/tmp \
      -v "$PWD":/work -w /work ruby:<pinned> \
-     sh -c 'gem install rails -v <pinned> && rails new <app> -d postgresql --devcontainer --skip-javascript --skip-hotwire --skip-jbuilder --skip-test -m <template>'
+     sh -c 'gem install rails -v <pinned> && rails new <app> -d postgresql --devcontainer --skip-javascript --skip-hotwire --skip-jbuilder --skip-kamal --skip-solid --skip-test -m <template>'
    ```
 
    The template asserts these options. Verify when adopting that Rails 8.1
@@ -379,8 +378,9 @@ the rule it serves.
    nothing outside `example_*` may depend on them (GEN-08).
 7. Assign CODEOWNERS for `engines/core`, `engines/design_system`, and every
    guard file except the ratchet files, which the ratchet check covers
-   (ARCH-12), and have your AI adapt the shipped AI files as
-   `14_working_with_ai.md` describes.
+   (ARCH-12). Give your AI agent its own GitHub identity (a machine user or a
+   GitHub App) with write access, never a person's account (WF-03), and have
+   it adapt the shipped AI files as `14_working_with_ai.md` describes.
 8. Set up logging, error reporting, backups, and deployment from
    `13_operations.md` before the first real user.
 

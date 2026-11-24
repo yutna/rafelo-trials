@@ -10,9 +10,14 @@ namespace :rafelo do
       unless ENV["RAFELO_TRIALS_RESTORE_CONFIRMED"] == "1"
         abort "rafelo:restore:prepare needs RAFELO_TRIALS_RESTORE_CONFIRMED=1"
       end
+      restore_url = ENV["RESTORE_DATABASE_URL"].presence
+      abort "rafelo:restore:prepare needs RESTORE_DATABASE_URL" if restore_url.nil?
 
-      Rafelo::Core::RestorePreparation.new.empty_sessions!
+      expected_role = ENV["DB_MIGRATION_USER"].presence || ENV["RESTORE_EXPECTED_ROLE"].presence
+      Rafelo::Core::RestorePreparation.new(url: restore_url, expected_role: expected_role).empty_sessions!
       puts "rafelo:restore:prepare: core_sessions is empty"
+    rescue Rafelo::Core::RestorePreparation::LiveDatabase => error
+      abort "rafelo:restore:prepare: #{error.message}"
     end
   end
 end

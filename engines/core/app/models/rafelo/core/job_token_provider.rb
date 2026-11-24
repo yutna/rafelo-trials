@@ -3,9 +3,12 @@
 module Rafelo
   module Core
     class JobTokenProvider
-      def initialize(session_id, budget:)
+      def initialize(session_id, budget:, request_id:, trace_id:, trace_sampled: false)
         @session_id = session_id
         @budget = budget
+        @request_id = request_id
+        @trace_id = trace_id
+        @trace_sampled = trace_sampled
       end
 
       def token
@@ -29,12 +32,14 @@ module Rafelo
           session: session,
           gateway: AuthGateway.new(
             budget: @budget,
-            request_id: Current.request_id,
-            trace_id: Current.trace_id
+            request_id: @request_id,
+            trace_id: @trace_id,
+            trace_sampled: @trace_sampled
           ),
           timeout: Rails.application.config.x.sessions.refresh_timeout_seconds,
           wait: Rails.application.config.x.sessions.refresh_timeout_seconds + 2,
-          force: force
+          force: force,
+          deadline: @budget.deadline
         ).call
         session.reload.access_token
       rescue ApplicationError => error

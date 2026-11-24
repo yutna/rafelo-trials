@@ -6,15 +6,15 @@ exports are short-lived and intentionally not backed up.
 
 ## What is kept
 
-| Data | Retention | How it is removed |
-| --- | --- | --- |
-| Audit records (`core_audit_events`) | 365 days (configured) | Drop whole monthly partitions with the migration role (OPS-08) |
-| Sessions (`core_sessions`) | At most the 12-hour absolute lifetime | Expired rows deleted in batches every hour by `SessionSweepJob` |
-| Idempotency keys (`core_idempotency_keys`) | 13 hours: the 12-hour absolute session lifetime plus a one-hour margin; a form token older than this is refused | Expired rows deleted in batches every hour by `IdempotencySweepJob` |
-| Exports (`core_exports` and Active Storage files) | 6 hours | `ExportSweepJob` purges files and rows in batches every hour |
-| Queue (Solid Queue) | Finished jobs are transient | `SolidQueue::Job.clear_finished_in_batches` every hour |
-| Cache (Solid Cache) | At most 30 days, and at most 256 MB | Solid Cache's `max_age` and `max_size` |
-| Cable (Solid Cable) | 1 day | `message_retention: 1.day` |
+| Data                                              | Retention                                                                                                       | How it is removed                                                   |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Audit records (`core_audit_events`)               | 365 days (configured)                                                                                           | Drop whole monthly partitions with the migration role (OPS-08)      |
+| Sessions (`core_sessions`)                        | At most the 12-hour absolute lifetime                                                                           | Expired rows deleted in batches every hour by `SessionSweepJob`     |
+| Idempotency keys (`core_idempotency_keys`)        | 13 hours: the 12-hour absolute session lifetime plus a one-hour margin; a form token older than this is refused | Expired rows deleted in batches every hour by `IdempotencySweepJob` |
+| Exports (`core_exports` and Active Storage files) | 6 hours                                                                                                         | `ExportSweepJob` purges files and rows in batches every hour        |
+| Queue (Solid Queue)                               | Finished jobs are transient                                                                                     | `SolidQueue::Job.clear_finished_in_batches` every hour              |
+| Cache (Solid Cache)                               | At most 30 days, and at most 256 MB                                                                             | Solid Cache's `max_age` and `max_size`                              |
+| Cable (Solid Cable)                               | 1 day                                                                                                           | `message_retention: 1.day`                                          |
 
 Every purge uses `in_batches`; audit retention drops a partition instead of
 running one long `DELETE`. No purge holds a lock across a large table.
@@ -49,6 +49,34 @@ host; a volume on the same host is not a backup.
 recovery, set the same 14-day retention, and record the provider's restore
 procedure in this file. The application-side steps below do not change.
 
+## Decision record: single-host PITR uses pgBackRest
+
+Status: accepted.
+
+**Context.** The single-host profile runs PostgreSQL as a Kamal accessory on
+a named volume (OPS-06). A volume on the serving host is not a backup, and
+copying a running data directory is unsafe. The profile therefore needs an
+off-host repository, continuous WAL archiving, and a restore path proven by a
+drill; the specification leaves the tool to a decision record (OPS-07).
+
+**Decision.** Use pgBackRest for the single-host profile. Run it from a
+pinned backup container or a backup host, not from the application image and
+not from the database accessory: it owns the stanza, the off-host repository,
+the base backups, and the WAL archive. The repository is a second host, an
+S3-compatible bucket, or a mounted volume that is not the database volume.
+The database runs with `wal_level=replica`, `archive_mode=on`, and an
+`archive_command` that writes the repository; keep 14 daily full backups and
+14 days of WAL. The multi-host profile keeps the managed provider's PITR
+instead.
+
+**Consequences.** The template adds no application dependency, and the
+single-host profile gets the same recovery point objective shape as the
+managed one. The cost is one more scheduled service to pin, monitor, and drill;
+its image or package version, stanza name, repository, and retention are
+recorded beside the deploy profile at adoption. Verification is the drill
+below, which restores a base backup, replays WAL to a chosen point, and runs
+`script/ops/restore_drill` against the scratch database.
+
 ## Restore procedure
 
 1. Choose the recovery point. It must be after the base backup's consistent
@@ -63,30 +91,46 @@ procedure in this file. The application-side steps below do not change.
 
    Restore into a new data directory and start a separate PostgreSQL on a
    scratch port or host.
+
 3. Before the app takes traffic, empty every restored session. Sessions
    revoked after the recovery point would otherwise work again until their
    absolute expiry (SEC-16). Run with the migration role, which owns the
    table:
 
    ```sh
-   RESTORE_DATABASE_URL=postgres://.../rafelo_trials \
+   RESTORE_DATABASE_URL=postgres://.../rafelo_trials_scratch \
    RAILS_ENV=production \
+   RAILS_MASTER_KEY=$RAILS_MASTER_KEY \
+   RAILS_HOSTS=restore.invalid \
+   DB_USER=rafelo_trials_runtime \
+   RAFELO_TRIALS_API_BASE_URL=https://api.example.com \
    RAFELO_TRIALS_DATABASE_ROLE=migration \
    RAFELO_TRIALS_RESTORE_CONFIRMED=1 \
      bin/rails rafelo:restore:prepare
    ```
 
-   The task refuses to run without the confirmation flag and the migration
-   role, truncates `core_sessions`, and prints that the table is empty. Make
-   `RESTORE_DATABASE_URL` connect as the migration role (or use `DB_HOST`,
-   `DB_PORT`, and `DB_NAME` so the role switch in `config/database.yml`
-   applies); the URL is never printed.
+   Run this from the release image or with the deploy profile's `env.clear`
+   and `RAILS_MASTER_KEY`, as the command shows. The task opens
+   `RESTORE_DATABASE_URL` for the truncate and reads the live connection only
+   to compare cluster identity; it never writes to the live database. It
+   refuses to run without the URL, the confirmation flag, and the migration
+   role, refuses a URL that reaches the live cluster (it compares the database
+   OID and postmaster start time, not the URL spelling), refuses a connected
+   role that differs from `DB_MIGRATION_USER` when that setting is present,
+   truncates `core_sessions` on the scratch target, and prints that the table
+   is empty. Make the URL connect as the migration role; the URL is never
+   printed.
+
 4. Run the drill check, which repeats the truncate and proves the table has
    zero rows:
 
    ```sh
-   RESTORE_DATABASE_URL=postgres://.../rafelo_trials \
+   RESTORE_DATABASE_URL=postgres://.../rafelo_trials_scratch \
    RAILS_ENV=production \
+   RAILS_MASTER_KEY=$RAILS_MASTER_KEY \
+   RAILS_HOSTS=restore.invalid \
+   DB_USER=rafelo_trials_runtime \
+   RAFELO_TRIALS_API_BASE_URL=https://api.example.com \
    RESTORE_RECOVERY_POINT="2026-11-13 22:39:25.268097+00" \
    RESTORE_EXPECTED_ROLE=rafelo_trials_migrator \
      script/ops/restore_drill

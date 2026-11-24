@@ -67,11 +67,30 @@ module Rafelo
       end
 
       def gateway(klass)
+        # BE-02: verify_authorized runs after the action, too late to protect
+        # the upstream. Refuse before building a client or making a call.
+        unless pundit_policy_authorized?
+          raise Pundit::NotAuthorizedError, "authorize before calling gateway(#{klass.name})"
+        end
+
+        budget = Current.call_budget ||= CallBudget.default
+        budget.deadline ||= request_deadline
+
         klass.new(
           token_provider: Current.token_provider,
-          budget: Current.call_budget ||= CallBudget.new(api: 3),
+          budget: budget,
           request_id: Current.request_id,
-          trace_id: Current.trace_id
+          trace_id: Current.trace_id,
+          trace_sampled: Current.trace_sampled,
+          session: Current.session
+        )
+      end
+
+      # One monotonic deadline per request. Gateway clients, the token refresh,
+      # and a loser's wait all read it (BE-16, SEC-03).
+      def request_deadline
+        @request_deadline ||= RequestDeadline.new(
+          Rails.application.config.x.requests.upstream_deadline_seconds
         )
       end
 
@@ -103,7 +122,9 @@ module Rafelo
         Current.session = session
         Current.viewer = Viewer.new(id: session.viewer_id, name: session.viewer_name.to_s)
         Current.permissions = PermissionSet.new(session.permission_grants)
-        Current.token_provider = ViewerTokenProvider.new(session)
+        Current.token_provider = viewer_token_provider(session)
+        request.env["rafelo.viewer_id"] = session.viewer_id.to_s
+        request.env["rafelo.session_id"] = session.id
         request.env["rafelo.log.viewer"] = LogPayload.opaque_viewer(session.viewer_id)
       end
 
@@ -113,19 +134,37 @@ module Rafelo
         refresh_session!
       end
 
-      def refresh_session!
-        gateway = AuthGateway.new(
-          budget: CallBudget.new(api: 3),
+      def viewer_token_provider(session)
+        ViewerTokenProvider.new(
+          session,
           request_id: request.request_id,
-          trace_id: Current.trace_id
+          trace_id: Current.trace_id,
+          trace_sampled: Current.trace_sampled,
+          budget: -> { Current.call_budget ||= CallBudget.default(deadline: request_deadline) },
+          deadline: request_deadline,
+          on_refresh: lambda do |refreshed|
+            Current.permissions = refreshed.permission_set if Current.session&.id == refreshed.id
+          end
+        )
+      end
+
+      def refresh_session!
+        budget = Current.call_budget ||= CallBudget.default
+        budget.deadline ||= request_deadline
+        gateway = AuthGateway.new(
+          budget: budget,
+          request_id: request.request_id,
+          trace_id: Current.trace_id,
+          trace_sampled: Current.trace_sampled
         )
         SessionRefresher.new(
           session: Current.session,
           gateway: gateway,
           timeout: Rails.application.config.x.sessions.refresh_timeout_seconds,
-          wait: Rails.application.config.x.sessions.refresh_timeout_seconds + 2
+          wait: Rails.application.config.x.sessions.refresh_timeout_seconds + 2,
+          deadline: request_deadline
         ).call
-        Current.token_provider = ViewerTokenProvider.new(Current.session.reload)
+        Current.token_provider = viewer_token_provider(Current.session.reload)
         Current.permissions = Current.session.permission_set
       rescue ApplicationError => error
         raise if error.code == "auth.expired"
@@ -143,6 +182,8 @@ module Rafelo
       def clear_session!
         Current.session&.destroy
         Current.session = nil
+        request.env["rafelo.viewer_id"] = nil
+        request.env["rafelo.session_id"] = nil
         Current.viewer = nil
         Current.permissions = nil
         Current.token_provider = nil
@@ -172,6 +213,7 @@ module Rafelo
       def page_context
         @page_context ||= PageContextFactory.build(
           session: Current.session,
+          trace_id: Current.trace_id,
           flags: Flags.current,
           locale: I18n.locale,
           request_id: Current.request_id,
@@ -197,7 +239,7 @@ module Rafelo
       end
 
       def pundit_user
-        Current.viewer
+        Rafelo::Core::BasePolicy::PolicyUser.new(viewer: Current.viewer, permissions: Current.permissions)
       end
 
       def deny_access(error = nil)

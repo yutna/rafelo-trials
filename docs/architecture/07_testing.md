@@ -361,6 +361,23 @@ exits 0 when every file is excluded ("No files found or given"). So a crash, a
 configuration error, a parse error, an ignored file, and a run that inspected
 no file all fail the canary.
 
+A canary also states how many offenses it expects. Each fixture declares the
+exact count, and the canary fails on any other number, so a rule that reports
+one of three forms, or reports its legal counterpart too, fails.
+
+Each custom cop and each local ESLint rule has a bypass fixture next to its
+canary. Reported: the forbidden name reached through a leading `::`, through
+safe navigation (`&.`), through `send`, `public_send`, or `__send__` with a
+literal method name (Ruby) or a computed member with a string literal and an
+aliased or namespace import (TypeScript), and a file at a look-alike path
+that an exemption must not cover (another engine's `scoped_cache.rb`,
+`my_upstream_client.rb`). Not reported: the name only in a string or a
+comment, and the exact exempt file. A form that a syntax rule cannot see (a
+constant reached through a variable, a method name computed at run time) is
+named in the rule's matrix row with the guard that covers it instead (a spec,
+or review). `script/ci/enforcement_canaries` fails when a rule it discovers
+from its sources has no bypass fixture.
+
 A fixture proves that a rule's selector fires, not that the real
 configuration applies it where the code lives. A path-scoped rule (an ESLint
 `files:` block, a cop's `Include`, a dependency-cruiser path) can match
@@ -443,7 +460,7 @@ tree:
 | `React.useState` and an imported `useState` in an engine test; the same in a design_system test (not reported) | ESLint state-hook restrictions (FE-04) |
 | `router`, `usePage`, a namespace import from `@inertiajs/react`, and an `@inertiajs/core` import in a design_system component; `Link` and `Deferred` there (not reported) | ESLint `designSystemInertia` (FE-03) |
 | A rulesets payload missing one required check; a tag ruleset payload that differs from `.github/rulesets/release_tags.json`; a CI workflow whose job is missing from `ci-ok`'s `needs:` | `script/ci/repo_rules`, `script/ci/workflow_policy` (WF-03, WF-05) |
-| Recorded reviews (`--reviews FILE`) with no approval from a listed owner for a changed guard file, and none from an owner for a raised ratchet count; the same changes with that approval (not reported) | `script/ci/guard_approval`, `script/ci/ratchet` (WF-03) |
+| Recorded reviews (`--reviews FILE`) with no approval from a listed owner for a changed guard file, and none from an owner for a raised ratchet count; an approval only from the pull request's author; a pull request that also removes its guard path from CODEOWNERS (the merge base's CODEOWNERS applies); the same changes with an approval from an owner who is not the author (not reported) | `script/ci/guard_approval`, `script/ci/ratchet` (WF-03) |
 | A topic file naming an extensionless `script/ci/<missing>` path and a missing kernel path (under `engines/core/` or `engines/design_system/`); a rule ID defined twice; a rule with no row, or two rows, in `09_enforcement.md`; a row for an undefined ID; a status outside the status vocabulary; a rule heading inside a fenced code block (not a heading); an input set with no definitions; a gitignored path, an illustrative engine path, and an engine-relative `config/` path in a topic file (not reported) | `docs:check` (CT-09) |
 | A `package.json` script that runs `tsx` without `--tsconfig tsconfig.tooling.json`; a page schema that imports from `@core/` and `@design_system/`, which `contracts:generate` and `docs:generate` must load (not reported) | `aliases:check`, `contracts:generate`, `docs:generate` (CT-03) |
 | A `pages/**/*.schema.ts` without a `pageSchema` export, a `pageSchema` whose top-level keys are not exactly the envelope's; an output with no source (the JSON Schema of a moved page, the locale JSON of a dropped locale) | `contracts:generate`, each generator's `--check` (CT-03) |
@@ -461,11 +478,13 @@ tree:
 | Every other custom check (`i18n:check` namespaces, `errors:check` prefixes, `aliases:check`, `script/ci/ratchet`, growth budgets) | that check |
 
 The table is not trusted to be complete. Before it runs the fixtures,
-`script/ci/enforcement_canaries` lists rule names from their sources (every
+`script/ci/enforcement_canaries` discovers names from their sources (every
 dependency-cruiser `forbidden[].name`, every `Rafelo/*` cop, every local ESLint
-rule (the `rafelo` plugin, `script/ci/eslint/rafelo.mjs`) and restriction
-entry from `eslint --print-config`, every
-`script/ci/*` check) and fails when a name has no fixture that expects it.
+rule and restriction printed by `eslint --print-config` at real paths, and
+every `script/ci/*` check) and requires a canary case per discovered name —
+the canary scripts run bad fixtures and legal counterparts, or the tools fail
+when a discovered name has no case · every custom rule has a bypass fixture
+and each fixture states its exact offense count.
 
 ### TS-08 — Accessibility is checked automatically (MUST · ADR-24)
 

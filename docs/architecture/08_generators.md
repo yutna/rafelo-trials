@@ -119,6 +119,12 @@ module RafeloTrials
 end
 ```
 
+Apps adopted before the app-owned grant catalog existed move the kernel's old
+synthetic grants fixture (under its spec/fixtures/upstream/api folder) to
+`config/grants.json` before the next kernel update. The generator, the fake
+upstream and the drift spec read only the app-owned file, so a new module no
+longer edits the kernel.
+
 ### GEN-02 — `rafelo:page` creates a complete, passing slice (MUST · ADR-06, ADR-13)
 
 For `rafelo:page <module> <resource> [--actions=index,show,new,edit]` (default
@@ -131,7 +137,7 @@ For `rafelo:page <module> <resource> [--actions=index,show,new,edit]` (default
 | Frontend | `pages/<resource>/<action>.tsx` with `.schema.ts` built by `definePage` with the page's `can` keys (CT-01, CT-03), screen, container, components, and types files; links and form actions use the URLs in props, never URLs built in TypeScript; `new`/`edit` pages use `useForm` and add the form token and the edit version from the current props at submit time (BE-15); test ids follow FE-09 |
 | Copy | titles, empty states, and field labels in the module's locale file for every configured locale |
 | Contracts | the page's JSON Schema in `engines/<module>/config/contracts/`, written by the post-write steps (GEN-09) |
-| Tests | request specs under the default locale prefix asserting schema and budgets at the maximum page size, with a fixture that supplies that many items, `have_resolvable_hrefs`, and `match_policy_capabilities` for the page's `can` keys (TS-02, TS-03, ARCH-10); redirect and error paths for writes; component tests |
+| Tests | request specs in the module's `engines/<module>/spec/requests/` under the default locale prefix asserting schema and budgets at the maximum page size, with a fixture that supplies that many items, `have_resolvable_hrefs`, and `match_policy_capabilities` for the page's `can` keys (TS-02, TS-03, ARCH-10); redirect and error paths for writes; component tests |
 | Routes | resourceful routes in the module's `config/routes.rb` |
 
 When `config/upstreams.yml` names more than one upstream, `--upstream=<name>`
@@ -208,17 +214,28 @@ verify() {
   npm run pages:check
 }
 
+verify_generated() {
+  verify "$@"
+  for engine in "$@"; do
+    bin/rubocop "engines/$engine"
+    if [ -d "spec/requests/$engine" ]; then bin/rubocop "spec/requests/$engine"; fi
+  done
+}
+
 # Create: a domain engine, two product modules, a read page and a write page.
 bin/rails generate rafelo:domain smoke_party
 bin/rails generate rafelo:module smoke_check
 bin/rails generate rafelo:module smoke_other
-bin/rails generate rafelo:page smoke_check widgets --actions=index,new
-verify smoke_party smoke_check smoke_other
+bin/rails generate rafelo:page smoke_check widgets --actions=index,new,edit
+RAILS_ENV=test bin/rails db:prepare
+verify_generated smoke_party smoke_check smoke_other
+RAILS_ENV=test bundle exec rspec spec/upstream/drift_spec.rb engines/smoke_check/spec
 
 # Change: move the resource to the other module, then rename that module.
 bin/rails generate rafelo:move_page smoke_check smoke_other widgets
 bin/rails generate rafelo:rename_module smoke_other smoke_renamed
-verify smoke_check smoke_renamed
+verify_generated smoke_check smoke_renamed
+RAILS_ENV=test bundle exec rspec spec/upstream/drift_spec.rb
 ```
 
 `bin/check <engine>` runs Packwerk, the generated dependency-cruiser rules,
@@ -245,6 +262,10 @@ with these differences:
 - `app/public/rafelo_trials/<name>/` and `app/frontend/public/` are what consumers use;
   everything else is private (ARCH-09);
 - its own i18n namespace for its presentational components;
+- it keeps the GEN-01 `config/errors.yml`, `config/ratchets.yml`,
+  `config/contracts/`, `db/migrate/`, `spec/`, and `e2e/` skeleton, plus the
+  `domain/`, `forms/`, `hooks/`, and `components/` folders a hook uses to bridge
+  framework-free code to its presentational surface.
 - `package.yml` declares `engines/core` and `engines/design_system`, with
   strict dependency and privacy enforcement.
 
@@ -312,7 +333,7 @@ A new project starts from the Rails application template:
 ```sh
 # runs in a throwaway container, so nothing is installed on the host
 docker run --rm -it --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/work -w /work ruby:<pinned> \
-  sh -c 'gem install rails -v <pinned> && rails new <app> -d postgresql --devcontainer --skip-javascript --skip-hotwire --skip-jbuilder --skip-test -m <template>'
+  sh -c 'gem install rails -v <pinned> && rails new <app> -d postgresql --devcontainer --skip-javascript --skip-hotwire --skip-jbuilder --skip-kamal --skip-solid --skip-test -m <template>'
 ```
 
 `<pinned>` is the Ruby image tag and the Rails version of the template
@@ -321,8 +342,10 @@ and `HOME=/tmp` gives that user a writable home. `-d postgresql` and
 `--devcontainer` set up PostgreSQL and the Dev Container (OPS-09); the skip
 flags leave out what the template replaces (the default JavaScript setup and
 Hotwire by Vite, React, and Inertia; Jbuilder by props objects; Minitest by
-RSpec). The template asserts these options and stops when one is missing.
-Verify the Rails 8.1 flag set, and that the image has git, when adopting.
+RSpec; the kamal and solid installers by the template's own deploy and
+database configuration). The template asserts these options and stops when
+one is missing. Verify the Rails 8.1 flag set, and that the image has git,
+when adopting.
 
 - The template derives the namespace from the app name (`rafelo_trials` → `RafeloTrials`),
   copies in the kernel (`engines/core`, `engines/design_system`, the
@@ -348,8 +371,13 @@ Verify the Rails 8.1 flag set, and that the image has git, when adopting.
   author, `Rafelo template <template@rafelo.invalid>`; it holds only what the
   template wrote.
 - Kernel-owned names keep the Rafelo brand in every adopter and are never
-  renamed: the generator namespace `rafelo:` and the RuboCop department
-  `Rafelo/`. Only the app namespace (`RafeloTrials`) follows the app name.
+  renamed: the generator namespace `rafelo:`, the RuboCop department
+  `Rafelo/`, and the kernel engines' Ruby namespaces `Rafelo::Core` and
+  `Rafelo::DesignSystem` with their `rafelo/core` and `rafelo/design_system`
+  paths, so `bin/kernel_update` merges kernel files without renaming them.
+  Only the app namespace (`RafeloTrials`) follows the app name: the app, its product
+  modules and domain engines, the example engines, and everything the
+  generators write.
 - From then on the kernel belongs to the adopter, security included. Nothing
   updates it remotely.
 - `bin/kernel_update <version>` produces a three-way merge for every kernel
@@ -361,8 +389,11 @@ Verify the Rails 8.1 flag set, and that the image has git, when adopting.
   must pass `bin/ci`.
 - By default it updates core, the generators, `script/ci/`, `bin/check`,
   `bin/kernel_update`, `spec/fixtures/hostile_urls.json` (FE-18), and the guard
-  configurations. design_system is updated
-  only folder by folder, on request
+  configurations. App-owned files the template renders with the app's namespace
+  are updated only with `--app-owned` and only while they still match the base
+  release; a file the payload does not ship is never added. An engine's
+  `AGENTS.md` is never overwritten. design_system is updated only folder by
+  folder, on request
   (`bin/kernel_update <version> --include design_system/<folder>`), because
   adopters restyle it.
 - The template's own CI adopts the commit under test: it packs `HEAD` with

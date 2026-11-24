@@ -48,7 +48,7 @@ RSpec.describe Rafelo::Core::SessionRefresher do
       end
     end.new(session_id: session.id, result: result)
 
-    token = described_class.new(session: session, gateway: gateway, timeout: 0).call
+    token = described_class.new(session: session, gateway: gateway, timeout: 0, deadline: Rafelo::Core::RequestDeadline.new(30)).call
 
     expect(token).to eq("successor-access")
     expect(Rafelo::Core::Session.exists?(session.id)).to be(true)
@@ -78,11 +78,28 @@ RSpec.describe Rafelo::Core::SessionRefresher do
       end
     end.new(result)
 
-    token = described_class.new(session: session, gateway: gateway, timeout: 15, force: true).call
+    token = described_class.new(session: session, gateway: gateway, timeout: 15, force: true, deadline: Rafelo::Core::RequestDeadline.new(30)).call
 
     expect(token).to eq("winner-access")
     expect(gateway.calls).to eq(1)
     expect(session.reload.access_token).to eq("winner-access")
+  end
+
+  it "times out the loser wait at the request deadline" do
+    session = start_session
+    session.update_column(:refreshing_since, Time.current)
+    gateway = Class.new do
+      def refresh(refresh_token:)
+        raise "a loser must not refresh"
+      end
+    end.new
+
+    expect do
+      described_class.new(
+        session: session, gateway: gateway, timeout: 15, wait: 30,
+        deadline: Rafelo::Core::RequestDeadline.new(0.01)
+      ).call
+    end.to raise_error(Rafelo::Core::ApplicationError) { |error| expect(error.code).to eq("upstream.timeout") }
   end
 
   it "maps a session deleted during refresh to auth.expired" do
@@ -100,7 +117,7 @@ RSpec.describe Rafelo::Core::SessionRefresher do
     end.new(session_id: session.id, result: result)
 
     expect do
-      described_class.new(session: session, gateway: gateway, timeout: 0).call
+      described_class.new(session: session, gateway: gateway, timeout: 0, deadline: Rafelo::Core::RequestDeadline.new(30)).call
     end.to raise_error(Rafelo::Core::ApplicationError) { |error| expect(error.code).to eq("auth.expired") }
   end
 end

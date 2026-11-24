@@ -65,8 +65,6 @@ module Rafelo
                 initializer "#{app_ns_underscore}_#{name}.migration_paths" do |app|
                   config.paths["db/migrate"].expanded.each { |path| app.config.paths["db/migrate"] << path }
                 end
-
-
               end
             end
           end
@@ -97,7 +95,7 @@ module Rafelo
             engine: #{namespace}::#{module_name}::Engine,
             path: "/#{name}",
             permission_prefixes: [ "#{name}" ],
-            nav: { order: Rafelo::Core::Modules.all.map { |entry| entry.nav[:order] }.compact.max.to_i + 10, label_key: "#{name}.nav.title", icon: "#{options[:icon]}" }
+            nav: { order: #{next_nav_order}, label_key: "#{name}.nav.title", icon: "#{options[:icon]}" }
           )
         RUBY
       end
@@ -118,12 +116,21 @@ module Rafelo
           create_file "#{engine_dir}/config/locales/#{locale}.yml", "#{locale}:\n  #{name}:\n    nav:\n      title: \"#{name.humanize}\"\n"
         end
         create_file "#{engine_dir}/config/errors.yml", "{}\n"
-        create_file "#{engine_dir}/config/permissions.yml", "#{name}:\n  widget: [read]\n"
+        create_file "#{engine_dir}/config/permissions.yml", "#{name}:\n  widgets: [read]\n"
         create_file "#{engine_dir}/config/budgets.yml", "pages: {}\n"
-        create_file "#{engine_dir}/config/ratchets.yml", "eslint_disable: 0\nuse_no_memo: 0\n"
+        create_file "#{engine_dir}/config/ratchets.yml", <<~YAML
+          eslint_disable: 0
+          rubocop_disable: 0
+          use_no_memo: 0
+          skipped_tests: 0
+          page_budget_overrides: 0
+          legacy_table_prefixes: 0
+          legacy_constants: 0
+        YAML
         create_file "#{engine_dir}/config/contracts/.keep", ""
         create_file "#{engine_dir}/db/migrate/.keep", ""
         create_file "#{engine_dir}/app/public/#{app_ns_underscore}/#{name}/.keep", ""
+        create_file "#{engine_dir}/spec/rails_helper.rb", "require_relative \"../../../spec/rails_helper\"\n"
         create_file "#{engine_dir}/spec/fixtures/upstream/.keep", ""
         create_file "#{engine_dir}/e2e/.keep", ""
       end
@@ -157,15 +164,16 @@ module Rafelo
           });
         TS
         create_file "#{engine_dir}/vitest.config.mts", <<~TS
-          import react from "@vitejs/plugin-react";
           import { defineConfig } from "vitest/config";
           import { fileURLToPath } from "node:url";
           import { engineAliases } from "../../config/frontend_aliases.mts";
+          import { reactPlugins } from "../../config/frontend_react.mts";
 
           const setupFiles = [fileURLToPath(new URL("../../vitest.setup.ts", import.meta.url))];
 
           export default defineConfig({
-            plugins: [react()],
+            root: fileURLToPath(new URL(".", import.meta.url)),
+            plugins: reactPlugins(),
             resolve: { alias: engineAliases },
             test: {
               projects: [
@@ -201,6 +209,12 @@ module Rafelo
 
       def app_ns_underscore
         namespace.gsub(/([a-z\d])([A-Z])/, '\\1_\\2').downcase
+      end
+
+      # The registry entry is plain data; compute the next order once, at
+      # generation time, and write it as a literal (ARCH-06).
+      def next_nav_order
+        Rafelo::Core::Modules.all.filter_map { |entry| entry.nav[:order] }.max.to_i + 10
       end
 
       def icon_names

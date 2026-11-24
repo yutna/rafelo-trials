@@ -28,13 +28,25 @@ Rails.application.configure do
     raise "ACTIVE_STORAGE_SERVICE must be local or amazon"
   end
   config.active_storage.service = active_storage_service.to_sym
+  # Files are served through core, never by Active Storage's disk or direct
+  # upload routes (BE-18, C4).
+  config.active_storage.draw_routes = false
 
   # Assume all access to the app is happening through a SSL-terminating reverse proxy.
   config.assume_ssl = true
 
-  # A real production boot needs the encrypted production credentials. The
-  # two dummy-boot tasks read the committed dummy credentials instead (SEC-12).
-  config.require_master_key = ENV["SECRET_KEY_BASE_DUMMY"].blank? && ENV["SECRET_KEY_BASE"].blank?
+  # A real production boot needs the encrypted production credentials; a
+  # SECRET_KEY_BASE environment value is not a substitute for the master key
+  # (BE-08). The dummy-boot tasks set SECRET_KEY_BASE_DUMMY and read the
+  # committed dummy credentials instead (SEC-12). This lives here as well as
+  # in config/application.rb because the environment file is part of the
+  # kernel that bin/kernel_update carries into an adopter.
+  if ENV["SECRET_KEY_BASE_DUMMY"].blank? && ENV["RAILS_MASTER_KEY"].blank?
+    raise ActiveSupport::EncryptedFile::MissingKeyError.new(
+      key_path: Rails.root.join("config/credentials/production.key"), env_key: "RAILS_MASTER_KEY"
+    )
+  end
+
   # Force all access to the app over SSL, use Strict-Transport-Security, and use secure cookies.
   config.force_ssl = true
 
@@ -87,9 +99,13 @@ Rails.application.configure do
   # Only use :id for inspections in production.
   config.active_record.attributes_for_inspect = [ :id ]
 
-  # Enable DNS rebinding protection and other `Host` header attacks.
-  hosts = ENV["RAILS_HOSTS"].presence || ENV["RAILS_HOST"].presence || "example.com"
-  config.hosts = hosts.split(",").map(&:strip).reject(&:empty?)
+  # Enable DNS rebinding protection and other `Host` header attacks. A missing
+  # host list fails boot instead of allowing the template's example host.
+  hosts = (ENV["RAILS_HOSTS"].presence || ENV["RAILS_HOST"].presence).to_s
+    .split(",").map(&:strip).reject(&:empty?)
+  raise "RAILS_HOSTS or RAILS_HOST is required" if hosts.empty?
+
+  config.hosts = hosts
 
   # Skip DNS rebinding protection for the default health check endpoint.
   config.host_authorization = { exclude: ->(request) { request.path == "/up" } }

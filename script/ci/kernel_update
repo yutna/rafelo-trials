@@ -1,12 +1,16 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "active_support/inflector"
 require "fileutils"
 require "open-uri"
 require "open3"
 require "optparse"
+require "set"
 require "tmpdir"
 require "yaml"
+
+require_relative "payload_paths"
 
 # Three-way merge of a new Rafelo kernel release into an adopted app (GEN-07,
 # ADR-27, ADR-28). Both releases are rendered with the adopter's namespace
@@ -17,50 +21,85 @@ module KernelUpdate
   DEFAULT_PATHS = %w[
     engines/core
     script/ci
-    script/contracts/permissions
-    script/ops/database_roles.sql
-    script/ops/restore_drill
+    script/contracts
+    script/docs
+    playwright.config.ts
+    vite.config.mts
+    vitest.config.mts
     bin/check
-    bin/docker-entrypoint
     bin/kernel_update
-    .env.ci.production
     spec/fixtures/hostile_urls.json
+    spec/rails_helper.rb
+    spec/spec_helper.rb
     spec/core
     spec/generators
-    spec/patches
-    spec/config
-    spec/requests
-    spec/support
-    spec/tasks
-    lib/tasks
+    spec/upstream
+    app/controllers/core
+    .kamal/secrets.example
+    docs/deployment.md
+    docs/operations/audit.md
+    docs/operations/backup-restore.md
+    docs/operations/database-roles.md
     .rubocop.yml
     .dependency-cruiser.cjs
-    .devcontainer
-    Dockerfile
-    package.json
-    package-lock.json
+    .prettierignore
+    .prettierrc.json
+    eslint.config.mjs
+    config/audit_exceptions.yml
     config/budgets.yml
     config/ci.rb
     config/contracts/_shared.json
-    config/database.yml
-    config/deploy.yml
-    config/deploy.multi.yml
     config/docs.yml
     config/errors.yml
+    config/production_routes.yml
+    config/ratchets.yml
+    package.yml
+    packwerk.yml
+    docs/contracts.md
+    spec/enforcement
+    .github
+  ].freeze
+
+  # App-owned paths a template update may refresh only with --app-owned; the
+  # default pass leaves them alone (GEN-07). These are the paths the template
+  # renders with the app's namespace and the adopter owns after adoption.
+  APP_OWNED_PATHS = %w[
+    AGENTS.md
+    .env.ci.production
+    app/frontend
+    bin/docker-entrypoint
+    config/application.rb
+    config/core.yml
+    config/database.yml
+    config/deploy.multi.yml
+    config/deploy.yml
+    config/environments
+    config/frontend_react.mts
+    config/initializers
+    config/locales
     config/locales.yml
     config/permission_mapping.yml
-    config/production_routes.yml
     config/puma.rb
     config/queue.yml
     config/routes.rb
     config/storage.yml
     config/upstreams.yml
-    config/environments
-    config/initializers
-    package.yml
-    packwerk.yml
-    spec/enforcement
-    .github
+    .devcontainer
+    Dockerfile
+    e2e
+    engines/design_system/e2e
+    lib/tasks
+    package-lock.json
+    package.json
+    script/ops/database_roles.sql
+    script/ops/restore_drill
+    spec/config
+    spec/contracts
+    spec/i18n
+    spec/patches
+    spec/requests
+    spec/support
+    spec/tasks
   ].freeze
 
   # The example engines are optional (GEN-08) and are never updated.
@@ -93,19 +132,31 @@ module KernelUpdate
     def files_under(relative)
       source = KernelUpdate.source_path(relative)
       full = File.join(root, source)
-      return [ relative ] if File.file?(full)
-      return [] unless Dir.exist?(full)
+      files = if File.file?(full)
+        [ relative ]
+      elsif Dir.exist?(full)
+        Dir.glob(File.join(full, "**", "*")).select { |path| File.file?(path) }
+          .map { |path| File.join(relative, path.delete_prefix("#{full}/")) }
+      else
+        []
+      end
 
-      Dir.glob(File.join(full, "**", "*")).select { |path| File.file?(path) }
-        .map { |path| File.join(relative, path.delete_prefix("#{full}/")) }
-        .reject { |path| KernelUpdate.untouched?(path) }
-        .sort
+      files.reject { |path| KernelUpdate.untouched?(path) || !shipped?(path) }.sort
+    end
+
+    def shipped?(relative)
+      # A release without a payload predates the filter; it ships everything it
+      # contains. A present but empty payload is a broken release, not a free
+      # pass for every path.
+      return true if @manifest.nil?
+
+      shipped_paths.include?(relative)
     end
 
     def mode_for(relative)
       return "github" if relative == ".github" || relative.start_with?(".github/")
 
-      entry = @manifest.select { |candidate| KernelUpdate.covers?(candidate.fetch("source"), relative) }
+      entry = Array(@manifest).select { |candidate| KernelUpdate.covers?(candidate.fetch("source"), relative) }
         .max_by { |candidate| candidate.fetch("source").length }
       entry ? entry.fetch("mode", "copy") : fallback_mode(relative)
     end
@@ -149,10 +200,42 @@ module KernelUpdate
 
     def load_manifest
       path = File.join(root, "template", "payload.yml")
-      return [] unless File.file?(path)
+      return nil unless File.file?(path)
 
       manifest = YAML.safe_load_file(path, aliases: false)
-      Array(manifest["paths"])
+      paths = manifest.is_a?(Hash) ? manifest["paths"] : nil
+      unless paths.is_a?(Array) && paths.any?
+        raise Error, "release payload has no paths: #{path}"
+      end
+
+      paths
+    end
+
+    # The payload is the list of files the template actually copied. A broader
+    # updater path must not add a file the adopter never received (the v0.37
+    # grant-catalog spec was the first such conflict).
+    def shipped_paths
+      @shipped_paths ||= Array(@manifest).flat_map do |entry|
+        source = entry.fetch("source")
+        destination = entry.fetch("destination", source)
+        full = File.join(root, KernelUpdate.source_path(source))
+        files = if File.file?(full)
+          [ source ]
+        elsif Dir.exist?(full)
+          Dir.glob(File.join(full, "**", "*")).select { |path| File.file?(path) }
+            .map { |path| File.join(source, path.delete_prefix("#{full}/")) }
+        else
+          []
+        end
+
+        files.reject { |file| excluded?(entry, file.delete_prefix("#{source}/")) }
+          .map { |file| destination + file.delete_prefix(source) }
+          .reject { |file| KernelUpdate.untouched?(file) }
+      end.to_set
+    end
+
+    def excluded?(entry, relative)
+      Rafelo::PayloadPaths.excluded?(relative, entry["exclude"])
     end
 
     def fallback_mode(relative)
@@ -170,30 +253,329 @@ module KernelUpdate
 
     attr_reader :results
 
-    def initialize(root:, base:, target:, includes:, namespace:, slug:)
+    def initialize(root:, base:, target:, includes:, namespace:, slug:, app_owned: false,
+                   migrate_generated: false)
       @root = root
       @base = base
       @target = target
       @includes = includes
       @namespace = namespace
       @slug = slug
+      @app_owned = app_owned
+      @migrate_generated = migrate_generated
       @results = []
     end
 
     def paths
       @paths ||= (
-        DEFAULT_PATHS + @includes.map { |folder| "engines/#{folder}" }
+        DEFAULT_PATHS +
+        (@app_owned ? APP_OWNED_PATHS : []) +
+        @includes.map { |folder| "engines/#{folder}" } +
+        (@includes.any? { |folder| folder.start_with?("design_system/") } ? [ "engines/design_system/api.d.ts" ] : [])
       ).uniq
     end
 
     def run
+      load_app_inflections
       paths.each do |path|
         fresh = @target.files_under(path) - @base.files_under(path)
         stale = @base.files_under(path) - @target.files_under(path)
         changed = @base.files_under(path) & @target.files_under(path)
         (fresh + stale + changed).uniq.each { |relative| merge(relative) }
       end
+      if @migrate_generated
+        migrate_generated_props
+        migrate_generated_controllers
+      end
       self
+    end
+
+    # The v0.26 page generator wrote Current.session&.id into the props
+    # object. The v0.27 kernel passes the session id through PageContext, so
+    # an unchanged generated props object is migrated in place; a customized
+    # one is left for the adopter to review.
+    def migrate_generated_props
+      Dir[File.join(@root, "engines", "*", "app", "props", "**", "*.rb")].sort.each do |path|
+        relative = path.delete_prefix("#{@root}/")
+        next if KernelUpdate.untouched?(relative)
+
+        body = File.read(path)
+        next unless generated_props?(body, relative)
+
+        File.write(path, body.gsub("Rafelo::Core::Current.session&.id", "context.session_id"))
+        results << Result.new(relative: relative, status: "migrated")
+      end
+    end
+
+    def migrate_generated_controllers
+      Dir[File.join(@root, "engines", "*", "app", "controllers", "**", "*_controller.rb")].sort.each do |path|
+        relative = path.delete_prefix("#{@root}/")
+        next if KernelUpdate.untouched?(relative)
+
+        body = File.read(path)
+        next unless generated_controller?(body, relative)
+        next unless body.include?("def create") && !body.match?(/^\s*throttle /)
+
+        engine = relative.split("/")[1]
+        actions = %w[create update].select { |action| body.match?(/^\s*def #{action}\b/) }
+        next if actions.empty?
+
+        line = "      throttle to: 30, within: 1.minute, only: %i[#{actions.join(' ')}], name: \"#{engine}/write\"\n"
+        migrated = body.sub(/^(\s*class .*< .*\n)/, "\\1#{line}")
+        next if migrated == body
+
+        File.write(path, migrated)
+        results << Result.new(relative: relative, status: "migrated")
+      end
+    end
+
+    def generated_props?(body, path)
+      match = path.match(%r{\Aengines/[^/]+/app/props/([^/]+)/([^/]+)/([^/]+)_(new|edit)_props\.rb\z})
+      return false unless match
+
+      _app_ns, mod, plural, action = match.captures
+      module_class = module_class_from(body, mod)
+      return false unless module_class
+
+      singular = singularize(plural)
+      expected = action == "new" ? new_props_template(module_class, mod, plural) : edit_props_template(module_class, mod, plural, singular)
+      normalize_body(body) == normalize_body(expected)
+    end
+
+    def generated_controller?(body, path)
+      match = path.match(%r{\Aengines/([^/]+)/app/controllers/([^/]+)/([^/]+)/([^/]+)_controller\.rb\z})
+      return false unless match
+
+      engine, _app_ns, mod, plural = match.captures
+      actions = body.scan(/^\s*def (\w+)/).flatten
+      return false if actions.empty? || (actions - %w[index show new create edit update]).any?
+
+      module_class = module_class_from(body, mod)
+      return false unless module_class
+
+      expected = controller_template(engine, module_class, mod, plural, actions)
+      normalize_body(body) == normalize_body(expected)
+    end
+
+    def controller_template(engine, module_class, mod, plural, actions)
+      singular = singularize(plural)
+      methods = []
+      methods << controller_index(module_class, mod, plural, singular) if actions.include?("index")
+      methods << controller_show(module_class, mod, plural, singular) if actions.include?("show")
+      methods << controller_new(module_class, mod, plural, singular) if actions.include?("new")
+      methods << controller_create(module_class, mod, plural, singular) if actions.include?("create")
+      methods << controller_edit(module_class, mod, plural, singular) if actions.include?("edit")
+      methods << controller_update(module_class, mod, plural, singular) if actions.include?("update")
+
+      <<~RUBY
+        # frozen_string_literal: true
+
+        module #{module_class}
+          class #{camelize(plural)}Controller < Rafelo::Core::BaseController
+            layout "application"
+
+        #{methods.join("\n\n")}
+          end
+        end
+      RUBY
+    end
+
+    def controller_index(module_class, mod, plural, singular)
+      <<~RUBY
+        def index
+          authorize :#{singular}, :index?, policy_class: #{module_class}::#{camelize(singular)}Policy
+          query = Rafelo::Core::ListQuery.from(params, sort: %w[id label], filters: {})
+          items = gateway(#{module_class}::#{camelize(plural)}Gateway).list(
+            page: query.page, per_page: query.per_page
+          )
+          render_page "#{mod}/#{plural}/index", props: #{module_class}::#{camelize(plural)}IndexProps.new(
+            context: page_context, items: items, query: query
+          )
+        end
+      RUBY
+    end
+
+    def controller_show(module_class, mod, plural, singular)
+      <<~RUBY
+        def show
+          authorize :#{singular}, :show?, policy_class: #{module_class}::#{camelize(singular)}Policy
+          render_page "#{mod}/#{plural}/show", props: #{module_class}::#{camelize(plural)}ShowProps.new(context: page_context, id: params[:id].to_s)
+        end
+      RUBY
+    end
+
+    def controller_new(module_class, mod, plural, singular)
+      <<~RUBY
+        def new
+          authorize :#{singular}, :new?, policy_class: #{module_class}::#{camelize(singular)}Policy
+          render_page "#{mod}/#{plural}/new", props: #{module_class}::#{camelize(plural)}NewProps.new(context: page_context)
+        end
+      RUBY
+    end
+
+    def controller_create(module_class, mod, plural, singular)
+      <<~RUBY
+        def create
+          authorize :#{singular}, :create?, policy_class: #{module_class}::#{camelize(singular)}Policy
+          form = #{module_class}::#{camelize(singular)}Form.new(params.permit(:name, :token))
+          back = page_context.urls.route(:#{mod}, :new_#{singular})
+          if form.invalid?
+            return redirect_after_write(back, errors: form.error_messages)
+          end
+
+          Rafelo::Core::IdempotencyClaim.call(
+            self,
+            token: form.token,
+            payload: form.payload,
+            back: back
+          ) do |idempotency_key|
+            created = gateway(#{module_class}::#{camelize(plural)}Gateway).create(
+              payload: form.payload, idempotency_key: idempotency_key
+            )
+            request.env["rafelo.audit.upstream_id"] = created.id.to_s if created.respond_to?(:id)
+            redirect_after_write(page_context.urls.route(:#{mod}, :#{plural}), notice: "Created.")
+          end
+        rescue Rafelo::Core::ValidationFailed => error
+          redirect_after_write(back, errors: form.translate(error.field_codes))
+        rescue Rafelo::Core::ApplicationError => error
+          raise unless error.code == "resource.conflict"
+
+          redirect_after_write(back, errors: { "base" => I18n.t("core.errors.fields.conflict") })
+        end
+      RUBY
+    end
+
+    def controller_edit(module_class, mod, plural, singular)
+      <<~RUBY
+        def edit
+          authorize :#{singular}, :edit?, policy_class: #{module_class}::#{camelize(singular)}Policy
+          render_page "#{mod}/#{plural}/edit", props: #{module_class}::#{camelize(plural)}EditProps.new(context: page_context, id: params[:id].to_s)
+        end
+      RUBY
+    end
+
+    def controller_update(module_class, mod, plural, singular)
+      <<~RUBY
+        def update
+          authorize :#{singular}, :update?, policy_class: #{module_class}::#{camelize(singular)}Policy
+          form = #{module_class}::#{camelize(singular)}Form.new(params.permit(:name, :token))
+          back = page_context.urls.route(:#{mod}, :edit_#{singular}, id: params[:id])
+          if form.invalid?
+            return redirect_after_write(back, errors: form.error_messages)
+          end
+
+          Rafelo::Core::IdempotencyClaim.call(
+            self,
+            token: form.token,
+            payload: form.payload.merge(id: params[:id].to_s),
+            back: back
+          ) do |idempotency_key|
+            updated = gateway(#{module_class}::#{camelize(plural)}Gateway).update(
+              id: params[:id].to_s, payload: form.payload, idempotency_key: idempotency_key
+            )
+            request.env["rafelo.audit.upstream_id"] = updated.id.to_s if updated.respond_to?(:id)
+            redirect_after_write(page_context.urls.route(:#{mod}, :#{singular}, id: params[:id]), notice: "Updated.")
+          end
+        rescue Rafelo::Core::ValidationFailed => error
+          redirect_after_write(back, errors: form.translate(error.field_codes))
+        rescue Rafelo::Core::ApplicationError => error
+          raise unless error.code == "resource.conflict"
+
+          redirect_after_write(back, errors: { "base" => I18n.t("core.errors.fields.conflict") })
+        end
+      RUBY
+    end
+
+    def new_props_template(module_class, mod, plural)
+      <<~RUBY
+        # frozen_string_literal: true
+
+        module #{module_class}
+          class #{camelize(plural)}NewProps < Rafelo::Core::PageProps
+            def envelope
+              {
+                data: {
+                  createHref: context.urls.route(:#{mod}, :#{plural}),
+                  indexHref: context.urls.route(:#{mod}, :#{plural})
+                },
+                meta: { formToken: Rafelo::Core::FormToken.issue(session_id: Rafelo::Core::Current.session&.id) },
+                query: {},
+                pagination: nil,
+                can: {}
+              }
+            end
+          end
+        end
+      RUBY
+    end
+
+    def edit_props_template(module_class, mod, plural, singular)
+      <<~RUBY
+        # frozen_string_literal: true
+
+        module #{module_class}
+          class #{camelize(plural)}EditProps < Rafelo::Core::PageProps
+            def initialize(context:, id:)
+              super(context: context)
+              @id = id
+            end
+
+            def envelope
+              {
+                data: {
+                  #{singular}: { id: @id, name: @id },
+                  updateHref: context.urls.route(:#{mod}, :#{singular}, id: @id),
+                  showHref: context.urls.route(:#{mod}, :#{singular}, id: @id)
+                },
+                meta: { formToken: Rafelo::Core::FormToken.issue(session_id: Rafelo::Core::Current.session&.id) },
+                query: {},
+                pagination: nil,
+                can: {}
+              }
+            end
+          end
+        end
+      RUBY
+    end
+
+    def normalize_body(body)
+      body.lines.map(&:strip).reject(&:empty?).join("\n")
+    end
+
+    # Read inflections instead of executing app initializers in the updater:
+    # a Rails-dependent initializer must not abort an update, and an app may
+    # keep them in application.rb, another initializer, or an engine.
+    def load_app_inflections
+      patterns = [
+        File.join(@root, "config", "application.rb"),
+        File.join(@root, "config", "initializers", "*.rb"),
+        File.join(@root, "engines", "*", "config", "initializers", "*.rb")
+      ]
+      patterns.flat_map { |pattern| Dir[pattern] }.uniq.each do |path|
+        source = File.read(path).lines.map { |line| line.sub(/\s+#.*$/, "") }.reject { |line| line.lstrip.start_with?("#") }.join
+        source.scan(/inflect\.acronym\(?\s*["']([^"']+)["']\s*\)?/).flatten.each do |acronym|
+          ActiveSupport::Inflector.inflections { |inflect| inflect.acronym(acronym) }
+        end
+        source.scan(/inflect\.irregular\(?\s*["']([^"']+)["'],\s*["']([^"']+)["']\s*\)?/).each do |single, plural|
+          ActiveSupport::Inflector.inflections { |inflect| inflect.irregular(single, plural) }
+        end
+      end
+    end
+
+    def module_class_from(body, mod)
+      module_class = body[/^module ([A-Z]\w*(?:::[A-Z]\w*)*)$/, 1]
+      return unless module_class
+
+      expected = "#{@namespace}::#{camelize(mod)}"
+      module_class if module_class == expected
+    end
+
+    def camelize(name)
+      ActiveSupport::Inflector.camelize(name)
+    end
+
+    def singularize(name)
+      ActiveSupport::Inflector.singularize(name)
     end
 
     def conflicts?
@@ -202,19 +584,28 @@ module KernelUpdate
 
     private
 
+    def app_owned?(relative)
+      APP_OWNED_PATHS.any? { |path| relative == path || relative.start_with?("#{path}/") }
+    end
+
     def merge(relative)
       local_path = File.join(@root, relative)
       local = File.file?(local_path) ? File.binread(local_path) : nil
       base = rendered(@base, relative)
       target = rendered(@target, relative)
 
-      return if base == target && local == base
-      if local == target
+      if app_owned?(relative) && !same_content?(local, base)
         results << Result.new(relative: relative, status: "kept")
         return
       end
 
-      if local == base
+      return if same_content?(base, target) && same_content?(local, base)
+      if same_content?(local, target)
+        results << Result.new(relative: relative, status: "kept")
+        return
+      end
+
+      if same_content?(local, base)
         if target.nil?
           FileUtils.rm_f(local_path)
           results << Result.new(relative: relative, status: "deleted")
@@ -225,8 +616,15 @@ module KernelUpdate
         return
       end
 
-      if base == target
+      if same_content?(base, target)
         results << Result.new(relative: relative, status: "kept")
+        return
+      end
+
+      if binary?(local) || binary?(base) || binary?(target)
+        FileUtils.mkdir_p(File.dirname(local_path))
+        File.write("#{local_path}.conflict", "resolve this binary conflict by hand\n")
+        results << Result.new(relative: relative, status: "conflict", conflict: true)
         return
       end
 
@@ -236,13 +634,7 @@ module KernelUpdate
         return
       end
 
-      if binary?(local) || binary?(base) || binary?(target)
-        File.write("#{local_path}.conflict", "resolve this binary conflict by hand\n")
-        results << Result.new(relative: relative, status: "conflict", conflict: true)
-        return
-      end
-
-      merged, conflict = merge_text(local, base, target)
+      merged, conflict = merge_text(local, base, target, relative: relative)
       write(local_path, merged, local_mode(local_path) || file_mode(@target, relative))
       if conflict
         results << Result.new(relative: relative, status: "conflict", conflict: true)
@@ -271,11 +663,24 @@ module KernelUpdate
           .gsub(%r{\blib/rafelo/(?!(?:core|design_system|page|module|domain|base|move_page|rename_module)/)}, "lib/#{@slug}/")
           .gsub(%r{(engines/[a-z0-9_]+/)rafelo_([a-z0-9_]+)}, "\\1#{@slug}_\\2")
           .gsub(%r{\blib/rafelo_([a-z0-9_]+)\.rb}, "lib/#{@slug}_\\1.rb")
+      when "docs"
+        placeholders(restore_kernel_names(text))
       when "placeholder", "github"
         placeholders(text)
       else
         text
       end
+    end
+
+    # The documentation examples use the placeholder app, but kernel names in
+    # them stay `Rafelo` in every adopter. This mirrors the template's docs mode
+    # so an unchanged adopted doc compares equal to its base release.
+    def restore_kernel_names(text)
+      text
+        .gsub("#{APP_PLACEHOLDER}::Core", "Rafelo::Core")
+        .gsub("#{APP_PLACEHOLDER}::DesignSystem", "Rafelo::DesignSystem")
+        .gsub("#{APP_PLACEHOLDER.downcase}/core", "rafelo/core")
+        .gsub("#{APP_PLACEHOLDER.downcase}/design_system", "rafelo/design_system")
     end
 
     def placeholders(text)
@@ -295,17 +700,22 @@ module KernelUpdate
 
     def write_conflict(path, local, target)
       FileUtils.mkdir_p(File.dirname(path))
-      body = if local.nil?
-        "<<<<<<< local (deleted)\n=======\n#{target}\n>>>>>>> target\n"
+      body = +"".b
+      if local.nil?
+        body << "<<<<<<< local (deleted)\n=======\n".b
+        body << target.to_s.b << "\n>>>>>>> target\n".b
       elsif target.nil?
-        "<<<<<<< local\n#{local}\n=======\n>>>>>>> target (deleted)\n"
+        body << "<<<<<<< local\n".b
+        body << local.to_s.b << "\n=======\n>>>>>>> target (deleted)\n".b
       else
-        "<<<<<<< local\n#{local}\n=======\n#{target}\n>>>>>>> target\n"
+        body << "<<<<<<< local\n".b
+        body << local.to_s.b << "\n=======\n".b
+        body << target.to_s.b << "\n>>>>>>> target\n".b
       end
       File.binwrite(path, body)
     end
 
-    def merge_text(local, base, target)
+    def merge_text(local, base, target, relative: nil)
       Dir.mktmpdir("rafelo-merge-") do |directory|
         local_path = File.join(directory, "local")
         base_path = File.join(directory, "base")
@@ -315,10 +725,22 @@ module KernelUpdate
         File.binwrite(target_path, target)
 
         output, status = Open3.capture2("git", "merge-file", "-p", "--diff3", local_path, base_path, target_path)
-        raise Error, "git merge-file failed" if status.exitstatus > 1
+        # git merge-file exits with the number of conflicts (truncated to 127),
+        # not 1. More than 127 means an error, and a signalled process has no
+        # exit status at all.
+        exitstatus = status.exitstatus
+        if exitstatus.nil? || exitstatus > 127
+          raise Error, "git merge-file failed for #{relative || 'a kernel file'}"
+        end
 
-        [ output, status.exitstatus == 1 ]
+        [ output, exitstatus.positive? ]
       end
+    end
+
+    def same_content?(left, right)
+      return left.nil? && right.nil? if left.nil? || right.nil?
+
+      left.b == right.b
     end
 
     def binary?(content)
@@ -335,6 +757,8 @@ module KernelUpdate
   module_function
 
   def untouched?(relative)
+    return true if relative.match?(%r{\Aengines/[^/]+/AGENTS\.md\z})
+
     UNTOUCHED_PREFIXES.any? { |prefix| relative.start_with?(prefix) }
   end
 
@@ -377,7 +801,10 @@ module KernelUpdate
 
   class CLI
     def initialize(argv)
-      @options = { root: Dir.pwd, includes: [], base_source: nil, source: nil, continue: false }
+      @options = {
+        root: Dir.pwd, includes: [], base_source: nil, source: nil, continue: false,
+        app_owned: false, base_version: nil, migrate_generated: false
+      }
       @version = parse(argv)
     end
 
@@ -391,8 +818,8 @@ module KernelUpdate
         return 0
       end
 
-      current = current_version(root)
-      return report_current(current) if current == @version
+      current = @options[:base_version] || current_version(root)
+      return report_current(current) if current == @version && @options[:base_version].nil?
 
       workspace = Dir.mktmpdir("rafelo-kernel-update-")
       base = Release.new(version: current, source: @options[:base_source], workspace: workspace)
@@ -409,7 +836,9 @@ module KernelUpdate
         target: target,
         includes: @options[:includes],
         namespace: KernelUpdate.namespace(root),
-        slug: KernelUpdate.slug(KernelUpdate.namespace(root))
+        slug: KernelUpdate.slug(KernelUpdate.namespace(root)),
+        app_owned: @options[:app_owned],
+        migrate_generated: @options[:migrate_generated]
       ).run
 
       update.results.each do |result|
@@ -418,8 +847,7 @@ module KernelUpdate
       end
 
       if update.conflicts?
-        includes = @options[:includes].flat_map { |folder| [ "--include", folder ] }
-        warn "kernel_update: conflicts remain; resolve them, then run bin/kernel_update #{@version} --continue #{includes.join(' ')}".strip
+        warn "kernel_update: conflicts remain; resolve them, then run bin/kernel_update #{@version} --continue"
         return 1
       end
 
@@ -434,11 +862,14 @@ module KernelUpdate
 
     def parse(argv)
       parser = OptionParser.new do |options|
-        options.banner = "Usage: bin/kernel_update VERSION [--root DIR] [--base-source DIR] [--source DIR] [--include design_system/FOLDER] [--continue]"
+        options.banner = "Usage: bin/kernel_update VERSION [--root DIR] [--base-source DIR] [--base-version VERSION] [--source DIR] [--include design_system/FOLDER] [--app-owned] [--migrate-generated] [--continue]"
         options.on("--root DIR") { |value| @options[:root] = value }
         options.on("--base-source DIR") { |value| @options[:base_source] = value }
+        options.on("--base-version VERSION") { |value| @options[:base_version] = value.delete_prefix("v") }
         options.on("--source DIR") { |value| @options[:source] = value }
         options.on("--include FOLDER") { |value| @options[:includes] << value }
+        options.on("--app-owned") { @options[:app_owned] = true }
+        options.on("--migrate-generated") { @options[:migrate_generated] = true }
         options.on("--continue") { @options[:continue] = true }
         options.on("-h", "--help") { puts options; exit 0 }
       end
@@ -457,6 +888,9 @@ module KernelUpdate
         unless folder.match?(%r{\Adesign_system/[a-z0-9_]+(?:/[a-z0-9_]+)*\z})
           raise Error, "--include must be design_system/<folder>: #{folder.inspect}"
         end
+      end
+      if @options[:base_version] && !@options[:base_version].match?(/\A(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\z/)
+        raise Error, "--base-version must be MAJOR.MINOR.PATCH: #{@options[:base_version].inspect}"
       end
 
       version

@@ -553,13 +553,10 @@ babel-plugin-react-compiler 1.0.0, @babel/core 7.29.13), a component's output
 imports `c` from `react/compiler-runtime`; without the Babel plugin it does
 not.
 
-`useReactTable` (@tanstack/react-table 8.21.3) is a library the compiler
-cannot memoize: eslint-plugin-react-hooks 7.1.1 warns
-`react-hooks/incompatible-library` and the compiler skips the component that
-calls it. Lint runs with `--max-warnings 0`, so the design_system data table,
-the only caller (FE-08), carries one `eslint-disable-next-line` with its
-reason, and the root `config/ratchets.yml` starts with that count for
-design_system.
+`useTable` (@tanstack/react-table 9.3.1) registers its behaviour through the
+stable `dataTableFeatures` object (`rowSortingFeature` only), so the
+design_system data table carries no `eslint-disable`, and the root
+`config/ratchets.yml` keeps `eslint_disable: 0` for design_system.
 
 Tests compile with the compiler too, or they test different code from what
 ships. `vite.config.mts`, the root `vitest.config.mts`, and each engine's
@@ -994,7 +991,13 @@ tables, charts, date fields, flash messages, and exports.
   (OOP-04), and the `Intl` and `toLocale*String` bans still apply.
   `DateRange` in `@core/domain` works on ISO calendar-date strings (CT-02).
 - **Rails.** The RuboCop cop `Rafelo/DateFormatterOnly` flags `strftime`,
-  `I18n.l` and `l(`, `to_fs`, and `to_formatted_s` outside `DateFormatter`. A
+  `I18n.l` and `l(`, `to_fs`, and `to_formatted_s` in all runtime Ruby (BE-08's
+  set: `app/`, `config/`, `db/`, `lib/` outside `lib/tasks/`, and every engine
+  outside its `spec/`) outside `DateFormatter`, whether or not the value
+  reaches a person. Machine formats need no exemption: `iso86ize` and `format`
+  build ISO dates and partition names
+  (`format("%04d_%02d", month.year, month.month)`), and the cop does not flag
+  them. Tooling (`bin/`, `lib/tasks/`, `script/`, specs) is outside the cop. A
   cop sees no types, so it cannot tell a `Date` from anything else; it flags
   the formatting calls only. Exports build on core's `Rafelo::Core::Export` base
   class, which formats every date through `DateFormatter`; its spec feeds it a

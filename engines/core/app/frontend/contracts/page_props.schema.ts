@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+// The CSP has no 'unsafe-eval'; Zod's eval probe would otherwise report a
+// script-src violation on every page (SEC-05). JIT-less parsing is the
+// supported mode under this policy.
+z.config({ jitless: true });
+
 import { appPathSchema } from "./app_path.schema";
 import { localeSchema } from "./locales.generated";
 
@@ -30,6 +35,20 @@ export const paginationSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+export const chartPointSchema = z.object({
+  label: z.string(),
+  value: z.number(),
+  date: z.string().optional(),
+});
+
+export const chartSeriesSchema = z.object({
+  name: z.string(),
+  type: z.enum(["pie"]),
+  data: z.array(chartPointSchema),
+});
+
+export const chartSchema = z.object({ series: z.array(chartSeriesSchema) });
+
 export const flashSchema = z.strictObject({
   notice: z.string().min(1).optional(),
   alert: z.string().min(1).optional(),
@@ -43,6 +62,7 @@ export const sharedPropsSchema = z.object({
     locale: localeSchema,
     locales: z.array(localeSchema),
     localeHrefs: z.array(z.object({ locale: localeSchema, href: appPathSchema })),
+    signInHref: appPathSchema,
     timeZone: z.string(),
   }),
   nav: z.array(
@@ -64,7 +84,9 @@ function canSchema<const K extends readonly string[]>(keys: K) {
   return z.strictObject(shape as Record<K[number], typeof capabilitySchema>);
 }
 
-type PaginationFor<P extends boolean> = P extends false ? z.ZodNull : z.ZodNullable<typeof paginationSchema>;
+type PaginationFor<P extends boolean> = P extends false
+  ? z.ZodNull
+  : z.ZodNullable<typeof paginationSchema>;
 
 export function definePage<
   D extends z.ZodType,
