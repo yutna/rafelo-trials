@@ -1,0 +1,40 @@
+# The upstream Rails devcontainer image does not publish Ruby 4.0.10 yet.
+# Start from its 4.0.9 image and install the patched Ruby from mise.toml below.
+ARG RUBY_VERSION=4.0.10
+ARG BASE_RUBY_VERSION=4.0.9
+FROM ghcr.io/rails/devcontainer/images/ruby:${BASE_RUBY_VERSION}@sha256:4f9a4f82ce15d03b8ef96631d42334ee8cb0f88bbca85829db339b8a92a32356
+
+USER root
+
+# The PostgreSQL client is needed by db:prepare/structure loads; the rest are
+# native dependencies for libvips, pg and the Playwright browsers.
+RUN apt-get update -qq && \
+    apt-get install --no-install-recommends -y \
+      build-essential curl git libpq-dev libvips postgresql-client && \
+    mkdir -p /ms-playwright && chown vscode:vscode /ms-playwright && \
+    rm -rf /var/lib/apt/lists /var/cache/apt/archives
+
+USER vscode
+
+# Bind Rails and Vite to every interface so forwarded ports work; the mise
+# shims put the pinned Node and npm on PATH for every shell and CI job.
+ENV BINDING="0.0.0.0" \
+    PATH="/home/vscode/.local/bin:/home/vscode/.local/share/mise/shims:${PATH}" \
+    PLAYWRIGHT_BROWSERS_PATH="/ms-playwright"
+
+# Install the pinned JavaScript toolchain and the browsers once, so a job only
+# runs npm ci and never downloads a browser. The image, not each job, owns the
+# browser binaries (OPS-09).
+COPY --chown=vscode:vscode mise.toml package.json package-lock.json /tmp/
+RUN cd /tmp && \
+    ruby_version="$(sed -n 's/^ruby = "\(.*\)"/\1/p' mise.toml)" && \
+    node_version="$(sed -n 's/^node = "\(.*\)"/\1/p' mise.toml)" && \
+    npm_version="$(sed -n 's/^npm = "\(.*\)"/\1/p' mise.toml)" && \
+    mise trust && \
+    mise install && \
+    mise use -g "ruby@${ruby_version}" "node@${node_version}" "npm@${npm_version}" && \
+    mise reshim && \
+    ruby -v && \
+    mise exec -- npm ci && \
+    mise exec -- npx playwright install --with-deps && \
+    rm -rf node_modules package.json package-lock.json mise.toml

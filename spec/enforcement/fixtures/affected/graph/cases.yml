@@ -1,0 +1,141 @@
+- name: a domain engine change reaches its transitive dependents
+  paths:
+    - engines/alpha/app/models/alpha.rb
+  expected:
+    - engine:alpha
+    - engine:beta
+    - engine:gamma
+- name: a dependencies list change reaches the declaring engine and its dependents
+  paths:
+    - engines/alpha/package.yml
+  expected:
+    - engine:alpha
+    - engine:beta
+    - engine:gamma
+- name: an app-only path selects the app and no engine
+  paths:
+    - app/controllers/home_controller.rb
+  expected:
+    - app
+- name: a documentation-only path selects nothing
+  paths:
+    - docs/architecture/00_README.md
+  expected: []
+- name: a root path in no list runs everything
+  paths:
+    - new_root_file.txt
+  expected:
+    - app
+    - engine:alpha
+    - engine:beta
+    - engine:gamma
+- name: an unchanged design_system API narrows to the design_system lane
+  args:
+    - --mode
+  paths:
+    - engines/design_system/app/frontend/button.tsx
+  expected:
+    - narrow
+- name: a design_system API change runs everything
+  args:
+    - --mode
+  paths:
+    - engines/design_system/api.d.ts
+  expected:
+    - all
+- name: a design_system change beside an app change runs everything
+  args:
+    - --mode
+  paths:
+    - engines/design_system/app/frontend/button.tsx
+    - app/controllers/home_controller.rb
+  expected:
+    - all
+- name: a design_system change beside documentation still narrows
+  args:
+    - --mode
+  paths:
+    - engines/design_system/app/frontend/button.tsx
+    - docs/architecture/00_README.md
+  expected:
+    - narrow
+- name: a documentation-only change does not narrow the RSpec lane
+  args:
+    - --mode
+  paths:
+    - docs/architecture/00_README.md
+  expected:
+    - all
+- name: an engine change does not narrow the RSpec lane
+  args:
+    - --mode
+  paths:
+    - engines/alpha/app/models/alpha.rb
+  expected:
+    - all
+- name: the github format names the app lane
+  args:
+    - --format
+    - github
+  paths:
+    - app/controllers/home_controller.rb
+  expected:
+    - mode=all
+    - app=true
+    - engines=
+- name: the github format names the engine lane
+  args:
+    - --format
+    - github
+  paths:
+    - engines/alpha/app/models/alpha.rb
+  expected:
+    - mode=all
+    - app=false
+    - engines=alpha,beta,gamma
+- name: the github format clears the lanes for the design_system narrowing
+  args:
+    - --format
+    - github
+  paths:
+    - engines/design_system/app/frontend/button.tsx
+  expected:
+    - mode=narrow
+    - app=false
+    - engines=
+- name: the github format selects no test lane for documentation
+  args:
+    - --format
+    - github
+  paths:
+    - docs/architecture/00_README.md
+  expected:
+    - mode=all
+    - app=false
+    - engines=
+- name: a lockfile-only change selects the reduced lane
+  args:
+    - --mode
+  paths:
+    - Gemfile.lock
+    - package-lock.json
+  expected:
+    - lockfile
+- name: a lockfile change beside a source change runs everything
+  args:
+    - --mode
+  paths:
+    - Gemfile.lock
+    - app/controllers/home_controller.rb
+  expected:
+    - all
+- name: the github format names the lockfile lane and clears the test lanes
+  args:
+    - --format
+    - github
+  paths:
+    - Gemfile.lock
+  expected:
+    - mode=lockfile
+    - app=false
+    - engines=

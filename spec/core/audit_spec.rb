@@ -1,0 +1,103 @@
+require "rails_helper"
+
+RSpec.describe Rafelo::Core::AuditRecorder do
+  after { Rafelo::Core::Current.reset }
+
+  def request_id
+    @request_id ||= "audit-spec-#{SecureRandom.hex(8)}"
+  end
+
+  it "truncates IPv4 and IPv6 and maps unknown user agents to other" do
+    expect(described_class.truncate_ip("203.0.113.77")).to eq("203.0.113.0/24")
+    expect(described_class.truncate_ip("::ffff:203.0.113.77")).to eq("203.0.113.0/24")
+    expect(described_class.truncate_ip("2001:db8:1234:5678::1")).to eq("2001:db8:1234::/48")
+    expect(described_class.truncate_ip("not-an-ip")).to be_nil
+    expect(described_class.family("")).to eq("other")
+    expect(described_class.family("x" * 600)).to eq("other")
+    expect(described_class.family("Mozilla/5.0 Chrome/140.0")).to eq("chrome")
+    expect(described_class.family("curl/8.0")).to eq("other")
+  end
+
+  it "writes one row per request even when called twice" do
+    request = double("request", request_id: request_id, remote_ip: "203.0.113.7", user_agent: "Chrome/140.0", path: "/en", env: {})
+    controller = double("controller", request: request)
+    2.times do
+      described_class.record(controller: controller, event: "write", outcome: "success", target: "/en/done")
+    end
+
+    expect(Rafelo::Core::AuditEvent.where(request_id: request_id, event: "write").count).to eq(1)
+    expect(Rafelo::Core::AuditEvent.where(request_id: request_id).last.ip).to eq("203.0.113.0/24")
+  end
+
+  it "sets the marker only after the insert and does not swallow an insert failure" do
+    request = double("request", request_id: request_id, remote_ip: "203.0.113.7", user_agent: "Chrome/140.0", path: "/en", env: {})
+    controller = double("controller", request: request)
+    allow(Rafelo::Core::AuditEvent).to receive(:create!).and_raise(ActiveRecord::StatementInvalid, "audit down")
+
+    expect do
+      described_class.record(controller: controller, event: "write", outcome: "success", target: "/en/done")
+    end.to raise_error(ActiveRecord::StatementInvalid)
+    expect(request.env["rafelo.audit_recorded"]).to be_falsey
+  end
+
+  it "records the audit format version" do
+    request = double("request", request_id: request_id, remote_ip: "203.0.113.7", user_agent: "Chrome/140.0", path: "/en", env: {})
+    controller = double("controller", request: request)
+
+    described_class.record(controller: controller, event: "write", outcome: "success", target: "/en/done")
+
+    expect(Rafelo::Core::AuditEvent.where(request_id: request_id).last.format_version).to eq(Rafelo::Core::AuditEvent::FORMAT_VERSION)
+  end
+
+  it "records the allow-listed resource, action, page, and upstream id" do
+    request = double(
+      "request",
+      request_id: request_id,
+      remote_ip: "203.0.113.7",
+      user_agent: "Chrome/140.0",
+      path: "/en/orders",
+      env: { "rafelo.page" => "orders/new", "rafelo.audit.upstream_id" => "order-9" }
+    )
+    controller = double("controller", request: request, controller_path: "admin/orders", action_name: "create")
+
+    described_class.record(
+      controller: controller,
+      event: "write",
+      outcome: "success",
+      target: "/en/orders",
+      policy: "OrderPolicy"
+    )
+
+    event = Rafelo::Core::AuditEvent.where(request_id: request_id).last
+    expect(event.resource).to eq("admin/orders")
+    expect(event.action).to eq("create")
+    expect(event.page).to eq("orders/new")
+    expect(event.upstream_id).to eq("order-9")
+    expect(event.policy).to eq("OrderPolicy")
+  end
+
+  it "makes audit rows append-only in the database on every partition" do
+    event = Rafelo::Core::AuditEvent.create!(
+      occurred_at: Time.current, event: "write", outcome: "success", created_at: Time.current
+    )
+
+    expect { event.update!(outcome: "failure") }.to raise_error(ActiveRecord::StatementInvalid, /append-only/)
+    expect { event.destroy }.to raise_error(ActiveRecord::StatementInvalid, /append-only/)
+  end
+
+  it "rejects updates and deletes on the DEFAULT and a future partition" do
+    events = [
+      Rafelo::Core::AuditEvent.create!(
+        occurred_at: 2.years.from_now, event: "write", outcome: "success", created_at: Time.current
+      ),
+      Rafelo::Core::AuditEvent.create!(
+        occurred_at: 1.month.from_now, event: "write", outcome: "success", created_at: Time.current
+      )
+    ]
+
+    events.each do |event|
+      expect { event.update!(outcome: "failure") }.to raise_error(ActiveRecord::StatementInvalid, /append-only/)
+      expect { event.destroy }.to raise_error(ActiveRecord::StatementInvalid, /append-only/)
+    end
+  end
+end

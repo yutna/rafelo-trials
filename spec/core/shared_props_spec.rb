@@ -1,0 +1,42 @@
+require "rails_helper"
+
+RSpec.describe Rafelo::Core::SharedProps do
+  before { allow(Rafelo::Core::Modules).to receive(:all).and_return([]) }
+
+  let(:context) do
+    Rafelo::Core::PageContext.new(
+      viewer: nil,
+      permissions: nil,
+      flags: {},
+      locale: :th,
+      request_id: "request-1",
+      trace_id: "trace-1",
+      session_id: nil,
+      urls: Rafelo::Core::Urls.new(locale: :th, router: Class.new.new)
+    )
+  end
+  let(:props) { described_class.new(context: context, request_path: "/th") }
+
+  it "builds auth, app, nav and errors" do
+    expect(props.to_h).to eq(
+      auth: { viewer: nil },
+      app: {
+        name: Rails.application.class.module_parent_name,
+        locale: "th",
+        locales: %w[en th],
+        localeHrefs: [ { locale: "en", href: "/en" }, { locale: "th", href: "/th" } ],
+        signInHref: "/th/sign_in",
+        timeZone: Time.zone.name
+      },
+      nav: []
+    )
+  end
+
+  it "builds trace from the context ids" do
+    expect(props.trace).to eq(requestId: "request-1", traceId: "trace-1")
+  end
+
+  it "keeps shared props inside their byte budget" do
+    expect(props.to_h.to_json.bytesize).to be <= 8_192
+  end
+end
