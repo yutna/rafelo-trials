@@ -78,6 +78,9 @@
             "additionalProperties": false
           }
         },
+        "newHref": {
+          "type": "string"
+        },
         "previousHref": {
           "type": [
             "string",
@@ -93,6 +96,7 @@
       },
       "required": [
         "items",
+        "newHref",
         "previousHref",
         "nextHref"
       ],
@@ -253,10 +257,30 @@
             "reason"
           ],
           "additionalProperties": false
+        },
+        "invoice.create": {
+          "type": "object",
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "allowed",
+            "reason"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
-        "invoice.read"
+        "invoice.read",
+        "invoice.create"
       ],
       "additionalProperties": false
     }

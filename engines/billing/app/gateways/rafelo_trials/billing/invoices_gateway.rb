@@ -22,6 +22,16 @@ module RafeloTrials
         InvoicesPage.new(items: items, total: payload.dig("pagination", "total").to_i)
       end
 
+      def create(payload:, idempotency_key:)
+        response = client.post(
+          "invoices",
+          body: payload.to_json,
+          headers: { "Content-Type" => "application/json" },
+          idempotency_key: idempotency_key
+        )
+        invoice(parse(response.body).fetch("data"))
+      end
+
       private
 
       def invoice(row)

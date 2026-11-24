@@ -5,6 +5,7 @@ module RafeloTrials
     class InvoicesIndexProps < Rafelo::Core::PageProps
       policy_class RafeloTrials::Billing::InvoicePolicy
       capability RafeloTrials::Billing::Permissions::INVOICE_READ, :index?
+      capability RafeloTrials::Billing::Permissions::INVOICE_CREATE, :create?
 
       def initialize(context:, page:, query:)
         super(context: context)
@@ -16,6 +17,7 @@ module RafeloTrials
         {
           data: {
             items: @page.items.map { |invoice| row(invoice) },
+            newHref: context.urls.route(:billing, :new_invoice),
             previousHref: previous_href,
             nextHref: next_href
           },
@@ -28,7 +30,10 @@ module RafeloTrials
             total: @page.total,
             pageCount: page_count
           },
-          can: capabilities(RafeloTrials::Billing::Permissions::INVOICE_READ)
+          can: capabilities(
+            RafeloTrials::Billing::Permissions::INVOICE_READ,
+            RafeloTrials::Billing::Permissions::INVOICE_CREATE
+          )
         }
       end
 
