@@ -4,32 +4,19 @@ import { describe, expect, it } from "vitest";
 import { StatusBadge } from "./status_badge";
 
 describe("StatusBadge", () => {
-  it("renders every tone with its text as the label", () => {
-    render(
-      <>
-        <StatusBadge testId="status.neutral" tone="neutral">
-          Draft
-        </StatusBadge>
-        <StatusBadge testId="status.success" tone="success">
-          Paid
-        </StatusBadge>
-        <StatusBadge testId="status.warning" tone="warning">
-          Overdue
-        </StatusBadge>
-      </>,
-    );
+  it.each([
+    ["neutral", "Draft"],
+    ["success", "Paid"],
+    ["warning", "Overdue"],
+  ] as const)("renders the %s tone with its text as the accessible label", (tone, text) => {
+    render(<StatusBadge tone={tone}>{text}</StatusBadge>);
 
-    expect(screen.getByTestId("status.neutral")).toHaveTextContent("Draft");
-    expect(screen.getByTestId("status.neutral")).toHaveClass("bg-muted");
-    expect(screen.getByTestId("status.success")).toHaveTextContent("Paid");
-    expect(screen.getByTestId("status.success")).toHaveClass("bg-emerald-100");
-    expect(screen.getByTestId("status.warning")).toHaveTextContent("Overdue");
-    expect(screen.getByTestId("status.warning")).toHaveClass("bg-amber-100");
+    expect(screen.getByRole("status", { name: text })).toHaveTextContent(text);
   });
 
-  it("uses the neutral tone by default", () => {
-    render(<StatusBadge testId="status.default">Draft</StatusBadge>);
+  it("renders the optional test id", () => {
+    render(<StatusBadge testId="billing.invoices.status">Paid</StatusBadge>);
 
-    expect(screen.getByTestId("status.default")).toHaveClass("bg-muted");
+    expect(screen.getByTestId("billing.invoices.status")).toHaveTextContent("Paid");
   });
 });

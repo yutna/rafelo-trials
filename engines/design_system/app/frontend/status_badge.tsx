@@ -1,29 +1,27 @@
-import type { ReactNode } from "react";
-
 import { tv } from "./internal/tailwind";
 
-const statusBadge = tv({
-  base: "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+const badge = tv({
+  base: "inline-flex items-center rounded-card px-2 py-1 text-sm font-medium",
   variants: {
     tone: {
-      neutral: "bg-muted text-slate-700",
-      success: "bg-emerald-100 text-emerald-900",
-      warning: "bg-amber-100 text-amber-900",
+      neutral: "bg-muted text-slate-900",
+      success: "bg-emerald-100 text-emerald-800",
+      warning: "bg-amber-100 text-amber-800",
     },
   },
   defaultVariants: { tone: "neutral" },
 });
 
 type StatusBadgeProps = {
-  testId: string;
   tone?: "neutral" | "success" | "warning";
-  children: ReactNode;
+  testId?: string;
+  children: string;
 };
 
-// The badge's text carries the meaning; the tone only repeats it visually.
-export function StatusBadge({ testId, tone, children }: StatusBadgeProps) {
+// The text is the label, so the tone only repeats the meaning visually.
+export function StatusBadge({ tone, testId, children }: StatusBadgeProps) {
   return (
-    <span data-testid={testId} className={statusBadge({ tone })}>
+    <span role="status" aria-label={children} data-testid={testId} className={badge({ tone })}>
       {children}
     </span>
   );

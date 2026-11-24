@@ -50,20 +50,6 @@ export function ComponentCatalogContainer() {
         <Toast testId="catalog-toast" tone="success">
           {t("app:catalog.saved")}
         </Toast>
-        <div className="space-y-2">
-          <h3 className="text-sm font-semibold">{t("app:catalog.badges")}</h3>
-          <div className="flex flex-wrap gap-2">
-            <StatusBadge testId="catalog-badge-neutral" tone="neutral">
-              {t("app:catalog.badge_neutral")}
-            </StatusBadge>
-            <StatusBadge testId="catalog-badge-success" tone="success">
-              {t("app:catalog.badge_success")}
-            </StatusBadge>
-            <StatusBadge testId="catalog-badge-warning" tone="warning">
-              {t("app:catalog.badge_warning")}
-            </StatusBadge>
-          </div>
-        </div>
         <Skeleton testId="catalog-skeleton" />
         <Pagination
           testId="catalog-pagination"
@@ -76,6 +62,20 @@ export function ComponentCatalogContainer() {
           onPageChange={(page) => setPagination({ page })}
         />
         <Icon name="folder" />
+      </section>
+      <section className="space-y-4">
+        <h2 className="text-xl font-semibold">{t("app:catalog.statuses")}</h2>
+        <div className="flex flex-wrap gap-2">
+          <StatusBadge testId="catalog-status-neutral" tone="neutral">
+            {t("app:catalog.invoice_draft")}
+          </StatusBadge>
+          <StatusBadge testId="catalog-status-success" tone="success">
+            {t("app:catalog.invoice_paid")}
+          </StatusBadge>
+          <StatusBadge testId="catalog-status-warning" tone="warning">
+            {t("app:catalog.invoice_overdue")}
+          </StatusBadge>
+        </div>
       </section>
       <section className="space-y-4">
         <h2 className="text-xl font-semibold">{t("app:catalog.data")}</h2>

@@ -482,13 +482,12 @@ declare module "@design_system/skeleton" {
 }
 
 declare module "@design_system/status_badge" {
-  import type { ReactNode } from "react";
   type StatusBadgeProps = {
-      testId: string;
       tone?: "neutral" | "success" | "warning";
-      children: ReactNode;
+      testId?: string;
+      children: string;
   };
-  export function StatusBadge({ testId, tone, children }: StatusBadgeProps): import("react").JSX.Element;
+  export function StatusBadge({ tone, testId, children }: StatusBadgeProps): import("react").JSX.Element;
   export {};
 }
 
