@@ -1,5 +1,23 @@
 {
   "nav": {
     "title": "Billing"
+  },
+  "invoices": {
+    "title": "Invoices",
+    "empty": "No invoices yet.",
+    "number": "Invoice number",
+    "customer": "Customer",
+    "status": "Status",
+    "total": "Total",
+    "issued_on": "Issue date",
+    "pagination": "Invoice pagination",
+    "previous": "Previous",
+    "next": "Next",
+    "statuses": {
+      "draft": "Draft",
+      "issued": "Issued",
+      "paid": "Paid",
+      "void": "Void"
+    }
   }
 }

@@ -19,7 +19,9 @@ engine: it owns its registry entry, routes, pages, and permissions.
   framework-free, and every user-facing string lives under
   `engines/billing/config/locales`.
 
-The module owns invoices but has no page, controller, gateway, or upstream
-call yet. Its navigation entry points at the module root; `rafelo:page`
-(GEN-02) adds the `root` route with the first index page, so the entry resolves
-from then on.
+The module owns invoices and serves them from `/billing/invoices`, which is
+also the module root. The read-only index page requires
+`billing:invoice:read`, reads the `api` upstream through `InvoicesGateway`,
+and lists invoice number, customer name, status, total, and issue date. A new
+page starts from `rafelo:page` (GEN-02); the first index page adds the `root`
+route the navigation entry points at.
