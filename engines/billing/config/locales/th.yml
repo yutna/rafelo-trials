@@ -2,3 +2,18 @@ th:
   billing:
     nav:
       title: "Billing"
+    invoices:
+      title: "ใบแจ้งหนี้"
+      empty: "ยังไม่มีใบแจ้งหนี้"
+      number: "เลขที่ใบแจ้งหนี้"
+      customer: "ลูกค้า"
+      status: "สถานะ"
+      total: "ยอดรวม"
+      issued_on: "วันที่ออก"
+      pagination: "การแบ่งหน้าใบแจ้งหนี้"
+      previous: "ก่อนหน้า"
+      next: "ถัดไป"
+      statuses:
+        draft: "ฉบับร่าง"
+        issued: "ออกแล้ว"
+        paid: "ชำระแล้ว"

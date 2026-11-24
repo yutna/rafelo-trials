@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "auth": {
+      "$ref": "https://rafelo.local/contracts/_shared.json#/properties/auth"
+    },
+    "trace": {
+      "$ref": "https://rafelo.local/contracts/_shared.json#/properties/trace"
+    },
+    "app": {
+      "$ref": "https://rafelo.local/contracts/_shared.json#/properties/app"
+    },
+    "nav": {
+      "$ref": "https://rafelo.local/contracts/_shared.json#/properties/nav"
+    },
+    "errors": {
+      "$ref": "https://rafelo.local/contracts/_shared.json#/properties/errors"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "number": {
+                "type": "string"
+              },
+              "customerName": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "total": {
+                "type": "object",
+                "properties": {
+                  "minor": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "currency": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 3
+                  },
+                  "exponent": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4
+                  }
+                },
+                "required": [
+                  "minor",
+                  "currency",
+                  "exponent"
+                ],
+                "additionalProperties": false
+              },
+              "issuedOn": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "number",
+              "customerName",
+              "status",
+              "total",
+              "issuedOn"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "previousHref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nextHref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "previousHref",
+        "nextHref"
+      ],
+      "additionalProperties": false
+    },
+    "meta": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "query": {
+      "type": "object",
+      "properties": {
+        "page": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "perPage": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "sort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "direction": {
+          "type": "string"
+        },
+        "filters": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "page",
+        "perPage",
+        "sort",
+        "direction",
+        "filters",
+        "cursor"
+      ],
+      "additionalProperties": false
+    },
+    "pagination": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "offset"
+                },
+                "page": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "perPage": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "total": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "pageCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "kind",
+                "page",
+                "perPage",
+                "total",
+                "pageCount"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "cursor"
+                },
+                "perPage": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "next": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "prev": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "perPage",
+                "next",
+                "prev"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "can": {
+      "type": "object",
+      "properties": {
+        "invoice.read": {
+          "type": "object",
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "allowed",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "invoice.read"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "auth",
+    "trace",
+    "app",
+    "nav",
+    "errors",
+    "data",
+    "meta",
+    "query",
+    "pagination",
+    "can"
+  ],
+  "additionalProperties": false
+}
