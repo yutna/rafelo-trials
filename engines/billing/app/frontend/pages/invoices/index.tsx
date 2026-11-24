@@ -12,7 +12,7 @@ export default function InvoicesIndex(props: Record<string, unknown>) {
   return (
     <>
       <Head title={t("invoices.title")} />
-      <InvoicesIndexScreen {...page.data} can={page.can} />
+      <InvoicesIndexScreen {...page.data} can={page.can} meta={page.meta} errors={page.errors} />
     </>
   );
 }
