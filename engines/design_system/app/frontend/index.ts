@@ -10,6 +10,7 @@ export { Menu } from "./menu";
 export { Pagination } from "./pagination";
 export { Select } from "./select";
 export { Skeleton } from "./skeleton";
+export { StatusBadge } from "./status_badge";
 export { Tabs } from "./tabs";
 export { TextField } from "./text_field";
 export { Toast } from "./toast";

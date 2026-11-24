@@ -8,6 +8,7 @@ import { Dialog } from "@design_system/dialog";
 import { Icon } from "@design_system/icon";
 import { Pagination } from "@design_system/pagination";
 import { Skeleton } from "@design_system/skeleton";
+import { StatusBadge } from "@design_system/status_badge";
 import { TextField } from "@design_system/text_field";
 import { Toast } from "@design_system/toast";
 import { lazy, Suspense } from "react";
@@ -61,6 +62,20 @@ export function ComponentCatalogContainer() {
           onPageChange={(page) => setPagination({ page })}
         />
         <Icon name="folder" />
+      </section>
+      <section className="space-y-4">
+        <h2 className="text-xl font-semibold">{t("app:catalog.statuses")}</h2>
+        <div className="flex flex-wrap gap-2">
+          <StatusBadge testId="catalog-status-neutral" tone="neutral">
+            {t("app:catalog.invoice_draft")}
+          </StatusBadge>
+          <StatusBadge testId="catalog-status-success" tone="success">
+            {t("app:catalog.invoice_paid")}
+          </StatusBadge>
+          <StatusBadge testId="catalog-status-warning" tone="warning">
+            {t("app:catalog.invoice_overdue")}
+          </StatusBadge>
+        </div>
       </section>
       <section className="space-y-4">
         <h2 className="text-xl font-semibold">{t("app:catalog.data")}</h2>

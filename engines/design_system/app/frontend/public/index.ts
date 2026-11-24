@@ -10,6 +10,7 @@ export { Menu } from "@design_system/menu";
 export { Pagination } from "@design_system/pagination";
 export { Select } from "@design_system/select";
 export { Skeleton } from "@design_system/skeleton";
+export { StatusBadge } from "@design_system/status_badge";
 export { Tabs } from "@design_system/tabs";
 export { TextField } from "@design_system/text_field";
 export { Toast } from "@design_system/toast";
