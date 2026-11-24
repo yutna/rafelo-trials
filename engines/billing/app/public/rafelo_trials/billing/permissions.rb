@@ -4,6 +4,7 @@ module RafeloTrials
   module Billing
     module Permissions
       INVOICE_READ = "billing:invoice:read"
+      INVOICE_CREATE = "billing:invoice:create"
     end
   end
 end

@@ -2,4 +2,5 @@
 
 export const Permissions = {
   INVOICE_READ: "billing:invoice:read",
+  INVOICE_CREATE: "billing:invoice:create",
 } as const;
