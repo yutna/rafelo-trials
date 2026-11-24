@@ -15,7 +15,6 @@ pages, registry entry, and permissions. It is not a domain engine.
   presentational, `domain/` and `forms/` are framework-free, and all
   user-facing copy lives in `engines/billing/config/locales`.
 
-The module owns no page, controller, gateway, or upstream call yet. It will own
-invoices. Its first page is created with `rafelo:page` (GEN-02), which also adds
-the `root` route navigation needs; until then the module stays out of
-navigation.
+The module owns invoices. Its first page is the read-only invoice list created
+with `rafelo:page` (GEN-02), which also adds the `root` route navigation links
+to.
