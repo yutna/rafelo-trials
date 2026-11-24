@@ -19,4 +19,14 @@ RSpec.describe "Billing module root", type: :request do
     expect(billing["path"]).to eq("/en/billing")
     expect(billing["current"]).to be(true)
   end
+
+  it "serves the invoice create form from the mounted module path" do
+    get "/en/billing/invoices/new",
+        headers: auth_headers(grants: [ "billing:invoice:read", "billing:invoice:create" ])
+
+    page = JSON.parse(response.body[/<script[^>]*data-page="app"[^>]*>(.*?)<\/script>/m, 1])
+    expect(response).to have_http_status(:ok)
+    expect(page["component"]).to eq("billing/invoices/new")
+    expect(page.dig("props", "can", "invoice.create", "allowed")).to be(true)
+  end
 end
