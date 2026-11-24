@@ -23,6 +23,12 @@
       "@/*": [
         "app/frontend/*"
       ],
+      "@billing/*": [
+        "engines/billing/app/frontend/*"
+      ],
+      "@billing/public/*": [
+        "engines/billing/app/frontend/public/*"
+      ],
       "@core/*": [
         "engines/core/app/frontend/*"
       ],
