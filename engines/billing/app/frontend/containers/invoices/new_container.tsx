@@ -1,9 +1,15 @@
 import type { Href } from "@design_system/public";
 
 import { InvoiceFormFields } from "@billing/components/invoices/form";
-import { useInvoiceForm } from "@billing/hooks/invoices/use_invoice_form";
+import {
+  initialInvoiceForm,
+  invoiceFormPayload,
+  type InvoiceFormValues,
+} from "@billing/forms/invoices/invoice_form";
 import { useBillingTranslation } from "@billing/i18n";
-import { Button, Link } from "@design_system/public";
+import { Button, Link, focusFirstError } from "@design_system/public";
+import { useForm } from "@inertiajs/react";
+import { useRef } from "react";
 
 type Props = {
   createHref: Href;
@@ -14,11 +20,19 @@ type Props = {
 
 export function InvoicesNewContainer({ createHref, indexHref, meta, errors }: Props) {
   const t = useBillingTranslation();
-  const { form, formRef, formErrors, submit } = useInvoiceForm({
-    action: createHref,
-    meta,
-    errors,
-  });
+  const form = useForm<InvoiceFormValues>(initialInvoiceForm());
+  const formRef = useRef<HTMLFormElement>(null);
+  const formErrors: Record<string, string> = { ...errors, ...form.errors };
+
+  function submit() {
+    form.transform((values) => ({
+      ...invoiceFormPayload(values),
+      token: meta.formToken,
+    }));
+    form.post(createHref, {
+      onError: () => setTimeout(() => focusFirstError(formRef.current ?? undefined), 0),
+    });
+  }
 
   return (
     <section className="mx-auto max-w-3xl px-6 py-16" data-testid="billing.invoices.new.page">
