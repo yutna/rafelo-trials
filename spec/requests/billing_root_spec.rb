@@ -10,7 +10,7 @@ RSpec.describe "Billing module root", type: :request do
         headers: { "Content-Type" => "application/json" }
       )
 
-    get "/en/billing", headers: auth_headers(grants: [ RafeloTrials::Billing::Permissions::INVOICE_READ ])
+    get "/en/billing", headers: auth_headers(grants: [ "billing:invoice:read" ])
 
     page = JSON.parse(response.body[/<script[^>]*data-page="app"[^>]*>(.*?)<\/script>/m, 1])
     billing = page.dig("props", "nav").find { |entry| entry["key"] == "billing" }
