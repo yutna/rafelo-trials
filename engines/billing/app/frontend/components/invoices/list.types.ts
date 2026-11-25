@@ -5,4 +5,5 @@ export type InvoiceListRow = {
   status: string;
   total: { minor: number; currency: string; exponent: number };
   issuedOn: string;
+  deleteHref: string | null;
 };
