@@ -68,7 +68,7 @@ RSpec.describe "Billing invoices", type: :request do
     expect(page_body.dig("props", "data", "items").length).to eq(Rafelo::Core::ListQuery.max_per_page)
   end
 
-  it "lists the invoice number, customer name, status, total, and issue date" do
+  it "lists the invoice number, customer name and email, status, total, and issue date" do
     stub_invoices(fixture.read)
 
     get "/#{locale}/billing/invoices", headers: headers
@@ -78,6 +78,7 @@ RSpec.describe "Billing invoices", type: :request do
       "id" => "inv_1",
       "number" => "INV-001",
       "customerName" => "Customer 1",
+      "customerEmail" => "customer1@example.test",
       "status" => "draft",
       "total" => { "minor" => 1250, "currency" => "THB", "exponent" => 2 },
       "issuedOn" => "2026-01-01",
