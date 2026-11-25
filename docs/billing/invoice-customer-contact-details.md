@@ -41,8 +41,9 @@ from the repository.
    or show a localized label? If a label, it must exist in `en` and `th`
    (CT-08), and the owner supplies the wording or approves it.
 4. **Plain text or links?** Plain text needs no URL. A `mailto:` or `tel:` link
-   is a URL: Rails must build it and pass it in props, and the page must treat it
-   as an external URL (ARCH-10, FE-18).
+   is a URL: Rails must build it and pass it in props (ARCH-10), and the current
+   `isSafeUrl` accepts only `http(s)` and app paths, so a link also needs a
+   safe-URL policy change that a person approves (FE-18).
 
 ## Proposed slice after the decisions
 
