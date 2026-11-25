@@ -34,9 +34,6 @@
               "customerName": {
                 "type": "string"
               },
-              "customerEmail": {
-                "type": "string"
-              },
               "status": {
                 "type": "string"
               },
@@ -80,7 +77,6 @@
               "id",
               "number",
               "customerName",
-              "customerEmail",
               "status",
               "total",
               "issuedOn",

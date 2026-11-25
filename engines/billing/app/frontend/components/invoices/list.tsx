@@ -1,5 +1,3 @@
-import type { DataTableColumn } from "@design_system/data_table.types";
-
 import { useBillingTranslation } from "@billing/i18n";
 import {
   Button,
@@ -11,16 +9,6 @@ import {
 } from "@design_system/public";
 
 import type { InvoiceListRow } from "./list.types";
-
-type InvoiceTableRow = {
-  id: string;
-  number: string;
-  customer: string;
-  customerEmail: string;
-  status: string;
-  total: string;
-  issuedOn: string;
-};
 
 function statusLabel(t: (key: string) => string, status: string): string {
   const key = `invoices.statuses.${status}`;
@@ -50,33 +38,17 @@ export function InvoicesList({
     return <EmptyState testId="billing.invoices.index.empty" title={emptyLabel} />;
   }
 
-  const rows: InvoiceTableRow[] = items.map((invoice) => ({
+  const rows = items.map((invoice) => ({
     id: invoice.id,
     number: invoice.number,
     customer: invoice.customerName,
-    customerEmail: invoice.customerEmail,
     status: statusLabel(t, invoice.status),
     total: formatMoney(invoice.total.minor, invoice.total.currency, invoice.total.exponent, locale),
     issuedOn: formatDate(invoice.issuedOn, locale),
   }));
-  const columns: DataTableColumn<InvoiceTableRow>[] = [
+  const columns: Parameters<typeof DataTable>[0]["columns"] = [
     { accessorKey: "number", header: t("invoices.number"), enableSorting: false },
-    {
-      accessorKey: "customer",
-      header: t("invoices.customer"),
-      enableSorting: false,
-      cell: ({ row }) => (
-        <div>
-          <span className="font-medium">{row.original.customer}</span>
-          <span
-            className="block text-sm text-slate-600"
-            data-testid={`billing.invoices.index.list.row.${row.original.id}.customer-email`}
-          >
-            {row.original.customerEmail}
-          </span>
-        </div>
-      ),
-    },
+    { accessorKey: "customer", header: t("invoices.customer"), enableSorting: false },
     { accessorKey: "status", header: t("invoices.status"), enableSorting: false },
     { accessorKey: "total", header: t("invoices.total"), enableSorting: false },
     { accessorKey: "issuedOn", header: t("invoices.issued_on"), enableSorting: false },
