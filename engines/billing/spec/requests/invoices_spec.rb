@@ -93,6 +93,7 @@ RSpec.describe "Billing invoices", type: :request do
           id: "inv_26",
           number: "INV-026",
           customer_name: "Customer 26",
+          customer_email: "customer26@example.test",
           status: "issued",
           total_minor: 2175,
           currency: "THB",
