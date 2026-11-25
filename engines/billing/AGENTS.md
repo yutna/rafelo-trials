@@ -22,6 +22,7 @@ engine: it owns its registry entry, routes, pages, and permissions.
 The module owns invoices and serves them from `/billing/invoices`, which is
 also the module root. The read-only index page requires
 `billing:invoice:read`, reads the `api` upstream through `InvoicesGateway`,
-and lists invoice number, customer name, status, total, and issue date. A new
-page starts from `rafelo:page` (GEN-02); the first index page adds the `root`
-route the navigation entry points at.
+and lists invoice number, customer name and email, status, total, and issue
+date. The email is the flat `customer_email` the `GET /invoices` list response
+carries for every invoice. A new page starts from `rafelo:page` (GEN-02); the
+first index page adds the `root` route the navigation entry points at.
