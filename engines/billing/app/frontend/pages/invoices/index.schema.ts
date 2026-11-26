@@ -6,6 +6,7 @@ const invoiceSchema = z.object({
   id: z.string(),
   number: z.string(),
   customerName: z.string(),
+  customerEmail: z.string(),
   status: z.enum(["open", "draft", "issued", "paid", "cancelled", "void"]),
   total: moneySchema,
   issuedOn: z.string(),

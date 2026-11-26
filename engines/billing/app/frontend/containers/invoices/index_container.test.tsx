@@ -33,6 +33,7 @@ const invoice: InvoiceListRow = {
   id: "inv_1",
   number: "INV-001",
   customerName: "Ada Example",
+  customerEmail: "ada@example.test",
   status: "draft",
   total: { minor: 1250, currency: "THB", exponent: 2 },
   issuedOn: "2026-11-12",
