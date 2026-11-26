@@ -14,7 +14,8 @@ A viewer on `/billing/invoices` can request a PDF of the invoice list. The PDF
 carries a localized title, the invoice rows, and an invoice total at the bottom.
 It is produced for that viewer, stored through `Rafelo::Core::Export` (BE-18),
 and downloaded from an authorized path bound to the viewer. A whole-list export
-runs as a job, because it needs more upstream calls than one request allows.
+can need up to 10 pages, more than the 3-call request budget, so it runs as a
+job.
 
 ## What the repository shows
 
@@ -57,7 +58,10 @@ runs as a job, because it needs more upstream calls than one request allows.
 The request says "the billing invoice list", but the list is paginated.
 
 - **Whole list (recommended).** The PDF is a file of the list, not of one page.
-  It needs the job, the `core_exports` record, and a download surface.
+  It can need up to 10 upstream calls, so it uses the job, the `core_exports`
+  record, and a download surface. A whole-list export capped at 300 invoices
+  (three pages) could also stream synchronously, but it would not cover the
+  1,000-invoice budget and is not recommended.
 - **Current page.** Fits one upstream call and could stream synchronously with
   no job, no export record, and no download surface. The title and the total
   then describe only that page, which is easy to misread in a file.
