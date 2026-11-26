@@ -346,6 +346,8 @@ declare module "@design_system/index" {
   export { Pagination } from "@design_system/pagination";
   export { Select } from "@design_system/select";
   export { Skeleton } from "@design_system/skeleton";
+  export { StatusBadge } from "@design_system/status_badge";
+  export type { StatusBadgeProps, StatusBadgeTone } from "@design_system/status_badge.types";
   export { Tabs } from "@design_system/tabs";
   export { TextField } from "@design_system/text_field";
   export { Toast } from "@design_system/toast";
@@ -430,6 +432,8 @@ declare module "@design_system/public" {
   export { Pagination } from "@design_system/pagination";
   export { Select } from "@design_system/select";
   export { Skeleton } from "@design_system/skeleton";
+  export { StatusBadge } from "@design_system/status_badge";
+  export type { StatusBadgeProps, StatusBadgeTone } from "@design_system/status_badge.types";
   export { Tabs } from "@design_system/tabs";
   export { TextField } from "@design_system/text_field";
   export { Toast } from "@design_system/toast";
@@ -477,6 +481,20 @@ declare module "@design_system/skeleton" {
   export function Skeleton({ testId }: {
       testId: string;
   }): import("react").JSX.Element;
+}
+
+declare module "@design_system/status_badge" {
+  import type { StatusBadgeProps } from "@design_system/status_badge.types";
+  export function StatusBadge({ testId, tone, children }: StatusBadgeProps): import("react").JSX.Element;
+}
+
+declare module "@design_system/status_badge.types" {
+  export type StatusBadgeTone = "neutral" | "success" | "warning";
+  export type StatusBadgeProps = {
+      testId: string;
+      tone?: StatusBadgeTone;
+      children: string;
+  };
 }
 
 declare module "@design_system/tabs" {
