@@ -47,6 +47,7 @@ module RafeloTrials
           id: row.fetch("id").to_s,
           number: row.fetch("number"),
           customer_name: row.fetch("customer_name"),
+          customer_email: row.fetch("customer_email"),
           status: row.fetch("status"),
           total_minor: row.fetch("total_minor"),
           currency: row.fetch("currency"),
