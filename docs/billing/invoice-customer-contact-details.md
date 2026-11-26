@@ -1,6 +1,7 @@
 # Customer contact details on the billing invoices list
 
-Status: blocked on owner decisions. Tracking issue: #75.
+Status: blocked on owner decisions. Tracking issue: #75. Draft pull request:
+#76.
 
 This page records the plan and the open decisions. It does not decide them.
 
