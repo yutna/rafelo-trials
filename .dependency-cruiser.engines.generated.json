@@ -1,5 +1,20 @@
 [
   {
+    "name": "billing-imports-declared-surfaces-only",
+    "severity": "error",
+    "from": {
+      "path": "^engines/billing/"
+    },
+    "to": {
+      "path": "^(app|engines)/",
+      "pathNot": [
+        "^engines/billing/",
+        "^engines/core/app/frontend/",
+        "^engines/design_system/app/frontend/"
+      ]
+    }
+  },
+  {
     "name": "core-imports-nothing-in-the-repository",
     "severity": "error",
     "from": {
