@@ -29,7 +29,8 @@ job.
   `issued_on`. The fixture is all THB, but the wire contract allows any
   ISO-4217 code per invoice.
 - `config/budgets.yml` allows 3 upstream calls per request and 10 per job. A
-  whole-list export cannot run inside the request; a current-page export can.
+  whole-list export can exceed the request budget (up to 10 pages); a
+  current-page export fits.
 - `Rafelo::Core::Export` stores a file in Active Storage, expires after 6 hours
   (`exports.ttl_seconds`), and `Rafelo::Core::ExportsController#show` checks the
   viewer and redirects to a short-lived signed URL. The app mounts only
@@ -207,8 +208,9 @@ route for the click and no page that lists a viewer's exports.
   should be its own issue.
 - **C. A notification or email when ready.** Needs a notification or mailer path
   the app does not have.
-- **D. A synchronous download.** Possible only for the current page within the
-  3-call request budget; a whole-list export needs the job.
+- **D. A synchronous download.** Possible only for the current page (or a whole
+  list of up to 300 invoices) within the 3-call request budget; the whole list
+  at the 1,000-invoice cap needs the job.
 
 Recommendation: A. It keeps ownership and the signed URL in core and gives the
 viewer a link without guessing a URL.
