@@ -1,0 +1,11 @@
+{
+  "data": {
+    "id": "inv_101",
+    "number": "INV-101",
+    "customer_name": "Ada Example",
+    "status": "open",
+    "total_minor": 1250,
+    "currency": "THB",
+    "issued_on": "2026-11-24"
+  }
+}
