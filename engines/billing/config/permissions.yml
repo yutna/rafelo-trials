@@ -1,2 +1,2 @@
 billing:
-  invoice: [read, create]
+  invoice: [read, create, delete]

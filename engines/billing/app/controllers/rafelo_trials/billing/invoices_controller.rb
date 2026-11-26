@@ -5,7 +5,7 @@ module RafeloTrials
     class InvoicesController < Rafelo::Core::BaseController
       layout "application"
 
-      throttle to: 30, within: 1.minute, only: :create, name: "billing/invoices/write"
+      throttle to: 30, within: 1.minute, only: %i[create destroy], name: "billing/invoices/write"
 
       def index
         authorize :invoice, :index?, policy_class: InvoicePolicy
@@ -44,6 +44,39 @@ module RafeloTrials
         raise unless error.code == "resource.conflict"
 
         redirect_after_write(back, errors: { "base" => I18n.t("billing.invoices.conflict") })
+      end
+
+      def destroy
+        authorize :invoice, :destroy?, policy_class: InvoicePolicy
+        back = index_href
+        Rafelo::Core::IdempotencyClaim.call(
+          self,
+          token: params[:token],
+          payload: { id: params[:id].to_s },
+          back: back,
+          session_id: Rafelo::Core::Current.session&.id,
+          viewer_id: Rafelo::Core::Current.viewer&.id
+        ) do |idempotency_key|
+          gateway(InvoicesGateway).delete(id: params[:id].to_s, idempotency_key: idempotency_key)
+          request.env["rafelo.audit.upstream_id"] = params[:id].to_s
+          redirect_after_write(back, notice: t("billing.invoices.deleted"))
+        end
+      rescue Rafelo::Core::ApplicationError => error
+        raise unless error.code == "resource.conflict"
+
+        redirect_after_write(back, errors: { "base" => t("billing.invoices.delete_failed") })
+      end
+
+      private
+
+      # The delete returns the viewer to the page they left, never to page 1
+      # of the list; ListQuery normalizes the values the same way the index
+      # does.
+      def index_href
+        return page_context.urls.route(:billing, :invoices) if params[:page].blank? && params[:per_page].blank?
+
+        query = Rafelo::Core::ListQuery.from(params, sort: %w[number issued_on total])
+        page_context.urls.route(:billing, :invoices, page: query.page, per_page: query.per_page)
       end
     end
   end

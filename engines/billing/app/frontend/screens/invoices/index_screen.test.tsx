@@ -14,6 +14,8 @@ const props = {
   previousHref: null,
   nextHref: null,
   can: {},
+  meta: { formToken: "token" },
+  errors: {},
 };
 
 async function renderScreen(locale: "en" | "th") {

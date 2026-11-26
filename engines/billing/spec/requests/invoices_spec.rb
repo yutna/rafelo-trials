@@ -14,6 +14,14 @@ RSpec.describe "Billing invoices", type: :request do
       ]
     )
   end
+  let(:delete_headers) do
+    auth_headers(
+      grants: [
+        RafeloTrials::Billing::Permissions::INVOICE_READ,
+        RafeloTrials::Billing::Permissions::INVOICE_DELETE
+      ]
+    )
+  end
 
   def stub_invoices(body, query: hash_including({}))
     stub_request(:get, "#{upstream_base_url}/invoices")
@@ -26,11 +34,22 @@ RSpec.describe "Billing invoices", type: :request do
       .to_return(status: status, body: body, headers: { "Content-Type" => "application/json" })
   end
 
+  def stub_delete_invoice(id = "inv_1", status: 204)
+    stub_request(:delete, "#{upstream_base_url}/invoices/#{id}")
+      .to_return(status: status, body: "")
+  end
+
   def page_body
     PageMatchers.page_of(response)
   end
 
   def form_token(headers, path = "/#{locale}/billing/invoices/new")
+    get path, headers: headers
+    page_body.dig("props", "meta", "formToken")
+  end
+
+  def index_form_token(headers, path = "/#{locale}/billing/invoices")
+    stub_invoices(fixture.read)
     get path, headers: headers
     page_body.dig("props", "meta", "formToken")
   end
@@ -62,7 +81,8 @@ RSpec.describe "Billing invoices", type: :request do
       "customerName" => "Customer 1",
       "status" => "draft",
       "total" => { "minor" => 1250, "currency" => "THB", "exponent" => 2 },
-      "issuedOn" => "2026-01-01"
+      "issuedOn" => "2026-01-01",
+      "deleteHref" => nil
     )
   end
 
@@ -210,5 +230,103 @@ RSpec.describe "Billing invoices", type: :request do
 
     expect(response).to have_http_status(:forbidden)
     expect(a_request(:post, "#{upstream_base_url}/invoices")).not_to have_been_made
+  end
+
+  it "offers the delete control and its href only to a viewer with the invoice delete grant" do
+    stub_invoices(fixture.read)
+
+    get "/#{locale}/billing/invoices", headers: delete_headers
+
+    expect(page_body.dig("props", "can", "invoice.delete", "allowed")).to be(true)
+    expect(page_body.dig("props", "data", "items").first.fetch("deleteHref")).to eq(
+      "/#{locale}/billing/invoices/inv_1?page=1&per_page=25"
+    )
+
+    get "/#{locale}/billing/invoices", headers: write_headers
+
+    expect(page_body.dig("props", "can", "invoice.delete", "allowed")).to be(false)
+    expect(page_body.dig("props", "data", "items").first.fetch("deleteHref")).to be_nil
+  end
+
+  it "deletes an invoice, returns to the list with 303, and replays without a second call" do
+    token = index_form_token(delete_headers)
+    stub_delete_invoice
+
+    delete "/#{locale}/billing/invoices/inv_1", params: { token: token }, headers: delete_headers
+
+    expect(response).to have_http_status(:see_other)
+    expect(response).to redirect_to("/#{locale}/billing/invoices")
+    expect(a_request(:delete, "#{upstream_base_url}/invoices/inv_1")).to have_been_made.once
+    expect(Rafelo::Core::IdempotencyKey.count).to eq(1)
+    event = Rafelo::Core::AuditEvent.where(event: "write", outcome: "success").last
+    expect(event.resource).to eq("rafelo_trials/billing/invoices")
+    expect(event.action).to eq("destroy")
+    expect(event.upstream_id).to eq("inv_1")
+
+    delete "/#{locale}/billing/invoices/inv_1", params: { token: token }, headers: delete_headers
+
+    expect(response).to have_http_status(:see_other)
+    expect(response).to redirect_to("/#{locale}/billing/invoices")
+    expect(a_request(:delete, "#{upstream_base_url}/invoices/inv_1")).to have_been_made.once
+  end
+
+  it "returns the viewer to the same list page after a delete" do
+    token = index_form_token(delete_headers, "/#{locale}/billing/invoices?page=2&per_page=50")
+    stub_delete_invoice
+
+    delete "/#{locale}/billing/invoices/inv_1?page=2&per_page=50",
+           params: { token: token }, headers: delete_headers
+
+    expect(response).to have_http_status(:see_other)
+    expect(response).to redirect_to("/#{locale}/billing/invoices?page=2&per_page=50")
+  end
+
+  it "treats an invoice the upstream already deleted as deleted" do
+    token = index_form_token(delete_headers)
+    stub_delete_invoice(status: 404)
+
+    delete "/#{locale}/billing/invoices/inv_1", params: { token: token }, headers: delete_headers
+
+    expect(response).to have_http_status(:see_other)
+    expect(response).to redirect_to("/#{locale}/billing/invoices")
+    expect(a_request(:delete, "#{upstream_base_url}/invoices/inv_1")).to have_been_made.once
+    expect(Rafelo::Core::AuditEvent.where(event: "write", outcome: "success").last.action).to eq("destroy")
+  end
+
+  it "keeps the viewer on the list when the upstream refuses the delete" do
+    token = index_form_token(delete_headers)
+    stub_delete_invoice(status: 409)
+
+    delete "/#{locale}/billing/invoices/inv_1", params: { token: token }, headers: delete_headers
+
+    expect(response).to have_http_status(:see_other)
+    expect(response).to redirect_to("/#{locale}/billing/invoices")
+
+    follow_redirect(delete_headers.fetch("Cookie"))
+    expect(page_body.dig("props", "errors", "base")).to eq("This invoice cannot be deleted.")
+    event = Rafelo::Core::AuditEvent.where(event: "write", outcome: "failure").last
+    expect(event.action).to eq("destroy")
+  end
+
+  it "refuses a delete without the page form token before calling the upstream" do
+    stub_invoices(fixture.read)
+
+    delete "/#{locale}/billing/invoices/inv_1", headers: delete_headers
+
+    expect(response).to have_http_status(:see_other)
+    expect(response).to redirect_to("/#{locale}/billing/invoices")
+    expect(a_request(:delete, "#{upstream_base_url}/invoices/inv_1")).not_to have_been_made
+
+    follow_redirect(delete_headers.fetch("Cookie"))
+    expect(page_body.dig("props", "errors", "base")).to eq(
+      I18n.t("core.idempotency.invalid_token")
+    )
+  end
+
+  it "denies a viewer without the invoice delete grant" do
+    delete "/#{locale}/billing/invoices/inv_1", params: { token: "unused" }, headers: write_headers
+
+    expect(response).to have_http_status(:forbidden)
+    expect(a_request(:delete, "#{upstream_base_url}/invoices/inv_1")).not_to have_been_made
   end
 end

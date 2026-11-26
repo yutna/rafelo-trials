@@ -73,6 +73,12 @@
               },
               "issuedOn": {
                 "type": "string"
+              },
+              "deleteHref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -81,7 +87,8 @@
               "customerName",
               "status",
               "total",
-              "issuedOn"
+              "issuedOn",
+              "deleteHref"
             ],
             "additionalProperties": false
           }
@@ -112,7 +119,14 @@
     },
     "meta": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "formToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "formToken"
+      ],
       "additionalProperties": false
     },
     "query": {
@@ -284,11 +298,31 @@
             "reason"
           ],
           "additionalProperties": false
+        },
+        "invoice.delete": {
+          "type": "object",
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "allowed",
+            "reason"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
         "invoice.read",
-        "invoice.create"
+        "invoice.create",
+        "invoice.delete"
       ],
       "additionalProperties": false
     }

@@ -32,6 +32,14 @@ module RafeloTrials
         invoice(parse(response.body).fetch("data"))
       end
 
+      # DELETE is idempotent: an invoice the upstream no longer has is already
+      # gone, so the caller's goal is met and it needs no special branch.
+      def delete(id:, idempotency_key:)
+        client.delete("invoices/#{id}", idempotency_key: idempotency_key)
+      rescue Rafelo::Core::ApplicationError => error
+        raise unless error.code == "resource.not_found"
+      end
+
       private
 
       def invoice(row)

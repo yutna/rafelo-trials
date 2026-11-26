@@ -20,6 +20,15 @@ en:
       pagination: "Invoice pagination"
       previous: "Previous"
       next: "Next"
+      actions: "Actions"
+      deleted: "Invoice deleted."
+      delete_failed: "This invoice cannot be deleted."
+      delete:
+        action: "Delete"
+        title: "Delete invoice?"
+        message: "Delete invoice %{number}? This cannot be undone."
+        confirm: "Delete"
+        cancel: "Cancel"
       statuses:
         open: "Open"
         draft: "Draft"
