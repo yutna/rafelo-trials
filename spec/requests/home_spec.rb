@@ -70,7 +70,7 @@ RSpec.describe "Home page", type: :request do
       entry = nav.find { |item| item["key"] == "example_orders" }
       expect(entry["path"]).to eq("/en/example_orders/")
 
-      get "/en", headers: auth_headers(grants: [ "billing:invoice:read" ])
+      get "/en", headers: auth_headers(grants: [ "billing:invoice:create" ])
       page = JSON.parse(response.body[/<script[^>]*data-page="app"[^>]*>(.*?)<\/script>/m, 1])
       expect(page.dig("props", "nav")).to be_empty
     end
