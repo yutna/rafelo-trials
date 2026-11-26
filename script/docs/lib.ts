@@ -1,0 +1,872 @@
+import { sharedPropsSchema } from "@core/contracts/page_props.schema";
+import { spawnSync } from "node:child_process";
+import { existsSync, globSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
+import { z } from "zod";
+
+export const RULE_PREFIXES = [
+  "ARCH",
+  "BE",
+  "CT",
+  "FE",
+  "GEN",
+  "OPS",
+  "SEC",
+  "TS",
+  "WF",
+  "OOP",
+] as const;
+export const STATUSES = ["enforced", "tested in kernel", "verify when adopting", "review"] as const;
+export const GENERATED_START = "<!-- generated:envelope:start -->";
+export const GENERATED_END = "<!-- generated:envelope:end -->";
+export const HELD_BACK_START = "<!-- generated:held-back:start -->";
+export const HELD_BACK_END = "<!-- generated:held-back:end -->";
+
+const ALL_PATH_PREFIXES = [
+  "script/",
+  "bin/",
+  "spec/",
+  "engines/",
+  "config/",
+  "app/",
+  ".github/",
+] as const;
+const TOPIC_PATH_PREFIXES = [
+  "script/",
+  "bin/",
+  ".github/",
+  "engines/core/",
+  "engines/design_system/",
+] as const;
+const ID_PATTERN = /\b(ARCH|BE|CT|FE|GEN|OPS|SEC|TS|WF|OOP|ADR)-(\d{2})\b/g;
+
+export type Finding = { file: string; line?: number; message: string };
+export type TextFile = { file: string; text: string };
+export type Definition = {
+  id: string;
+  kind: "rule" | "adr";
+  file: string;
+  line: number;
+  strength?: string;
+  decisions?: string[];
+  status?: "accepted" | "superseded";
+  supersededBy?: string;
+};
+export type DocsConfig = {
+  ai_instruction_files: string[];
+};
+
+export function isRuleId(id: string): boolean {
+  return RULE_PREFIXES.some((prefix) => id.startsWith(`${prefix}-`));
+}
+
+// Every pack skill named by one of the 16 resolved conflicts in
+// docs/architecture/lessons-learned.md (2026-11-14, skills audit). The root
+// guide must carry each resolution, not only the history entry.
+export const PACK_CONFLICTS = [
+  "oo-assigning-responsibilities",
+  "oo-placing-domain-logic",
+  "oo-layering-the-system",
+  "oo-designing-repositories",
+  "oo-taming-persistence",
+  "oo-design",
+  "oo-constructing-valid-objects",
+  "oo-encapsulating-state-and-behaviour",
+  "oo-making-illegal-states-impossible",
+  "oo-modeling-values-and-entities",
+  "oo-designing-failure-behaviour",
+  "oo-modeling-lifecycles",
+  "oo-deciding-object-or-data",
+  "oo-ruby",
+  "oo-reviewing-object-design",
+  "oo-working-within-a-framework",
+  "oo-managing-shared-state",
+  "oo-publishing-domain-events",
+  "oo-separating-reads-from-writes",
+  "oo-designing-what-to-record",
+  "oo-crossing-system-boundaries",
+  "oo-bounding-contexts",
+  "oo-organising-modules",
+  "oo-inverting-dependencies",
+  "oo-testing-object-oriented-code",
+  "oo-designing-for-testability",
+] as const;
+
+export function checkPackConflicts(text: string): Finding[] {
+  const findings: Finding[] = [];
+  const heading = "## Pack versus project";
+  const start = text.indexOf(heading);
+  if (start < 0) {
+    return [{ file: "AGENTS.md", message: `the "${heading}" section is missing` }];
+  }
+
+  const rest = text.slice(start + heading.length);
+  const next = rest.search(/\n## /);
+  const section = next < 0 ? rest : rest.slice(0, next);
+  for (const name of PACK_CONFLICTS) {
+    if (!section.includes(`\`${name}\``)) {
+      findings.push({ file: "AGENTS.md", message: `resolved pack conflict is missing: ${name}` });
+    }
+  }
+
+  const rows = section.split("\n").filter((line) => /^\|\s*`oo-/.test(line)).length;
+  if (rows < 16) {
+    findings.push({
+      file: "AGENTS.md",
+      message: `the "${heading}" section names ${rows} of the 16 pack conflicts`,
+    });
+  }
+
+  return findings;
+}
+
+export function loadConfig(root: string): { config?: DocsConfig; findings: Finding[] } {
+  const path = "config/docs.yml";
+  if (!existsSync(resolve(root, path))) {
+    return { findings: [{ file: path, message: "the docs configuration is missing" }] };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(readFileSync(resolve(root, path), "utf8"));
+  } catch (error) {
+    return {
+      findings: [{ file: path, message: `cannot parse YAML: ${(error as Error).message}` }],
+    };
+  }
+
+  const raw = (parsed ?? {}) as Record<string, unknown>;
+  const files = raw.ai_instruction_files;
+  const findings: Finding[] = [];
+
+  if (
+    !Array.isArray(files) ||
+    files.length === 0 ||
+    files.some((entry) => typeof entry !== "string")
+  ) {
+    findings.push({
+      file: path,
+      message: "ai_instruction_files must be a non-empty list of paths and globs",
+    });
+  }
+  return {
+    config: findings.length === 0 ? { ai_instruction_files: files as string[] } : undefined,
+    findings,
+  };
+}
+
+export function topicFiles(root: string): string[] {
+  return globSync("docs/architecture/[0-9][0-9]_*.md", { cwd: root })
+    .map((path) => path.split("\\").join("/"))
+    .sort();
+}
+
+export function aiFiles(
+  root: string,
+  config: DocsConfig,
+): { files: string[]; findings: Finding[] } {
+  const files = new Set<string>();
+  const findings: Finding[] = [];
+  for (const path of globSync("**/AGENTS.md", { cwd: root })) files.add(path.split("\\").join("/"));
+  for (const path of globSync("**/CLAUDE.md", { cwd: root })) files.add(path.split("\\").join("/"));
+  for (const path of globSync("docs/development/*.md", { cwd: root }))
+    files.add(path.split("\\").join("/"));
+  for (const pattern of config.ai_instruction_files) {
+    const matches = globSync(pattern, { cwd: root }).map((path) => path.split("\\").join("/"));
+    if (matches.length === 0) {
+      findings.push({
+        file: "config/docs.yml",
+        message: `ai_instruction_files entry matches no file: ${pattern}`,
+      });
+      continue;
+    }
+    for (const path of matches) files.add(path);
+  }
+  const selected = [...files]
+    .filter(
+      (path) =>
+        !path.startsWith("node_modules/") &&
+        !path.startsWith("tmp/") &&
+        !path.startsWith("vendor/") &&
+        !path.startsWith(".git/"),
+    )
+    .sort();
+  for (const path of globSync(".opencode/skills/*/SKILL.md", { cwd: root })
+    .map((path) => path.split("\\").join("/"))
+    .sort()) {
+    const name = path.split("/")[2] ?? "";
+    if (name.startsWith("oo-")) continue;
+    if (files.has(path)) continue;
+
+    findings.push({
+      file: "config/docs.yml",
+      message: `skill is not listed in ai_instruction_files: ${path}`,
+    });
+  }
+  for (const path of selected) {
+    if (path.startsWith(".opencode/skills/") && path.endsWith("/SKILL.md"))
+      validateSkill(root, path, findings);
+  }
+  return { files: selected, findings };
+}
+
+function validateSkill(root: string, path: string, findings: Finding[]): void {
+  const text = readFileSync(resolve(root, path), "utf8");
+  const frontMatter = text.match(/^---\n([\s\S]*?)\n---\n/);
+  if (!frontMatter) {
+    findings.push({ file: path, message: "skill has no front matter" });
+    return;
+  }
+  let data: unknown;
+  try {
+    data = parseYaml(frontMatter[1]);
+  } catch (error) {
+    findings.push({
+      file: path,
+      message: `skill front matter is not valid YAML: ${(error as Error).message}`,
+    });
+    return;
+  }
+  const record = (data ?? {}) as Record<string, unknown>;
+  const directory = path.split("/").at(-2);
+  if (typeof record.name !== "string" || record.name !== directory) {
+    findings.push({ file: path, message: `skill name must match its directory (${directory})` });
+  }
+  if (typeof record.description !== "string" || record.description.trim() === "") {
+    findings.push({ file: path, message: "skill is missing a description" });
+  }
+}
+
+export function readTextFiles(root: string, paths: string[]): TextFile[] {
+  return paths.map((file) => ({ file, text: readFileSync(resolve(root, file), "utf8") }));
+}
+
+function isFence(line: string): boolean {
+  return /^\s*```/.test(line);
+}
+
+export function collectDefinitions(files: TextFile[]): {
+  definitions: Map<string, Definition>;
+  findings: Finding[];
+} {
+  const definitions = new Map<string, Definition>();
+  const findings: Finding[] = [];
+
+  for (const { file, text } of files) {
+    const lines = text.split("\n");
+    let inFence = false;
+
+    lines.forEach((line, index) => {
+      if (isFence(line)) {
+        inFence = !inFence;
+        return;
+      }
+      if (inFence) return;
+
+      const heading = line.match(/^#{2,6}\s+([A-Z]{2,5}-\d{2})\s+—\s+(.+?)\s*$/);
+      if (!heading) return;
+
+      const id = heading[1];
+      const title = heading[2];
+      const lineNumber = index + 1;
+      if (definitions.has(id)) {
+        findings.push({
+          file,
+          line: lineNumber,
+          message: `${id} is defined more than once (first at ${definitions.get(id)!.file}:${definitions.get(id)!.line})`,
+        });
+        return;
+      }
+
+      if (id.startsWith("ADR-")) {
+        let statusLine: string | undefined;
+        for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+          if (/^#{2,6}\s+/.test(lines[cursor])) break;
+          const status = lines[cursor].match(/^Status:\s*(.+?)\s*$/);
+          if (status) {
+            statusLine = status[1];
+            break;
+          }
+        }
+        if (!statusLine) {
+          findings.push({ file, line: lineNumber, message: `${id} has no Status: line` });
+          return;
+        }
+        if (statusLine === "Accepted") {
+          definitions.set(id, { id, kind: "adr", file, line: lineNumber, status: "accepted" });
+        } else {
+          const superseded = statusLine.match(/^Superseded by (ADR-\d{2})$/);
+          if (!superseded) {
+            findings.push({
+              file,
+              line: lineNumber,
+              message: `${id} has an unknown status "${statusLine}"`,
+            });
+            return;
+          }
+          definitions.set(id, {
+            id,
+            kind: "adr",
+            file,
+            line: lineNumber,
+            status: "superseded",
+            supersededBy: superseded[1],
+          });
+        }
+        return;
+      }
+
+      if (!isRuleId(id)) {
+        findings.push({ file, line: lineNumber, message: `${id} is not a known rule prefix` });
+        return;
+      }
+
+      const decision = title.match(/^(.*?)\s*\(([^()]*)\)\s*$/);
+      if (!decision) {
+        findings.push({
+          file,
+          line: lineNumber,
+          message: `${id} does not end with its strength and decisions`,
+        });
+        return;
+      }
+      const parts = decision[2].split("·").map((part) => part.trim());
+      const strength = parts[0];
+      if (!["MUST", "SHOULD", "MAY"].includes(strength) || parts.length < 2) {
+        findings.push({
+          file,
+          line: lineNumber,
+          message: `${id} does not state (MUST|SHOULD|MAY · ADR-NN)`,
+        });
+        return;
+      }
+      const decisions = parts
+        .slice(1)
+        .join("·")
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean);
+      if (decisions.length === 0 || decisions.some((entry) => !/^ADR-\d{2}$/.test(entry))) {
+        findings.push({ file, line: lineNumber, message: `${id} does not name an ADR decision` });
+        return;
+      }
+      definitions.set(id, { id, kind: "rule", file, line: lineNumber, strength, decisions });
+    });
+  }
+
+  if (definitions.size === 0) {
+    findings.push({ file: "docs/architecture", message: "no rule or ADR definition was found" });
+  }
+
+  for (const definition of definitions.values()) {
+    const references =
+      definition.kind === "rule"
+        ? (definition.decisions ?? [])
+        : definition.supersededBy
+          ? [definition.supersededBy]
+          : [];
+    for (const reference of references) {
+      if (!definitions.has(reference)) {
+        findings.push({
+          file: definition.file,
+          line: definition.line,
+          message: `${definition.id} cites undefined ${reference}`,
+        });
+      }
+    }
+  }
+
+  return { definitions, findings };
+}
+
+export function checkMatrix(
+  text: string,
+  definitions: Map<string, Definition>,
+): { rows: number; findings: Finding[] } {
+  const findings: Finding[] = [];
+  const counts = new Map<string, number>();
+  let rows = 0;
+
+  for (const [index, line] of text.split("\n").entries()) {
+    const match = line.match(/^\|\s*([A-Z]{2,5}-\d{2})\s*\|/);
+    if (!match) continue;
+
+    const id = match[1];
+    rows += 1;
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+    const cells = line.split("|").map((cell) => cell.trim());
+    const rawStatus = cells[3] ?? "";
+    let status = rawStatus;
+    while (/\([^()]*\)/.test(status)) status = status.replace(/\([^()]*\)/g, " ");
+    const values = status
+      .split(/·|\+/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (
+      values.length === 0 ||
+      values.some((value) => !STATUSES.includes(value as (typeof STATUSES)[number]))
+    ) {
+      findings.push({
+        file: "docs/architecture/09_enforcement.md",
+        line: index + 1,
+        message: `${id} has an unknown enforcement status "${rawStatus}"`,
+      });
+    }
+    if (!definitions.has(id)) {
+      findings.push({
+        file: "docs/architecture/09_enforcement.md",
+        line: index + 1,
+        message: `${id} has a row but no definition`,
+      });
+    }
+  }
+
+  for (const definition of definitions.values()) {
+    if (definition.kind !== "rule") continue;
+    const count = counts.get(definition.id) ?? 0;
+    if (count !== 1) {
+      findings.push({
+        file: definition.file,
+        line: definition.line,
+        message: `${definition.id} has ${count} enforcement rows, expected exactly 1`,
+      });
+    }
+  }
+
+  if (rows === 0) {
+    findings.push({
+      file: "docs/architecture/09_enforcement.md",
+      message: "the enforcement matrix has no rows",
+    });
+  }
+
+  return { rows, findings };
+}
+
+export function checkCitations(
+  files: TextFile[],
+  definitions: Map<string, Definition>,
+): { citations: number; findings: Finding[] } {
+  const findings: Finding[] = [];
+  let citations = 0;
+
+  for (const { file, text } of files) {
+    text.split("\n").forEach((line, index) => {
+      for (const match of line.matchAll(ID_PATTERN)) {
+        citations += 1;
+        const id = `${match[1]}-${match[2]}`;
+        const definition = definitions.get(id);
+        if (!definition) {
+          findings.push({ file, line: index + 1, message: `${id} is cited but not defined` });
+        } else if (definition.kind === "adr" && definition.status === "superseded") {
+          findings.push({
+            file,
+            line: index + 1,
+            message: `${id} is superseded by ${definition.supersededBy}`,
+          });
+        }
+      }
+    });
+  }
+
+  return { citations, findings };
+}
+
+function pathTokens(span: string): string[] {
+  const tokens = span.match(/(?:script|bin|spec|engines|config|app|\.github)\/[^\s`]+/g) ?? [];
+  return tokens
+    .map((token) =>
+      token
+        .replace(/^[("'[]+/, "")
+        .replace(/[)"'\].,;:]+$/, "")
+        .replace(/:\d+$/, "")
+        .replace(/#.*$/, "")
+        .replace(/\/+$/, ""),
+    )
+    .filter(Boolean);
+}
+
+function hasPlaceholder(token: string): boolean {
+  return /[<>*{}$%?[\]|]|\.\.\./.test(token);
+}
+
+export type PathSource = { file: string; text: string; kind: "topic" | "instruction" };
+
+export function checkPaths(
+  root: string,
+  sources: PathSource[],
+  options: { ignored?: (path: string) => boolean } = {},
+): { paths: number; findings: Finding[] } {
+  const findings: Finding[] = [];
+  const candidates = new Map<string, { file: string; line: number }>();
+  let checked = 0;
+
+  for (const source of sources) {
+    const prefixes = source.kind === "instruction" ? ALL_PATH_PREFIXES : TOPIC_PATH_PREFIXES;
+    source.text.split("\n").forEach((line, index) => {
+      for (const span of line.matchAll(/`([^`\n]+)`/g)) {
+        for (const token of pathTokens(span[1])) {
+          if (hasPlaceholder(token)) continue;
+          if (
+            !prefixes.some(
+              (prefix) => token === prefix.replace(/\/$/, "") || token.startsWith(prefix),
+            )
+          )
+            continue;
+          if (!candidates.has(token)) candidates.set(token, { file: source.file, line: index + 1 });
+        }
+      }
+    });
+  }
+
+  const ignored = options.ignored ?? ((path: string) => ignoredByGit(root, path));
+  for (const [token, place] of candidates) {
+    if (ignored(token)) continue;
+    checked += 1;
+    // The template repository ships the adopter's .github/ files under
+    // template/ (GEN-07); in an adopted app the same path exists at the root.
+    const shipped = token.startsWith(".github/") && existsSync(resolve(root, "template", token));
+    if (!existsSync(resolve(root, token)) && !shipped) {
+      findings.push({ file: place.file, line: place.line, message: `names missing path ${token}` });
+    }
+  }
+
+  return { paths: checked, findings };
+}
+
+export function ignoredByGit(root: string, path: string): boolean {
+  if (!existsSync(resolve(root, ".git"))) return false;
+  const result = spawnSync("git", ["-C", root, "check-ignore", "--quiet", "--", path], {
+    encoding: "utf8",
+  });
+  return result.status === 0;
+}
+
+function shape(node: Record<string, unknown>): string {
+  if (!node || typeof node !== "object") return "unknown";
+  if (Array.isArray(node.anyOf))
+    return node.anyOf.map((entry) => shape(entry as Record<string, unknown>)).join(" or ");
+  if (Array.isArray(node.type))
+    return node.type.map((type) => (type === "null" ? "null" : String(type))).join(" or ");
+  if (node.type === "object" && node.properties) {
+    const properties = Object.entries(node.properties as Record<string, Record<string, unknown>>)
+      .map(([key, value]) => `${key}: ${shape(value)}`)
+      .join(", ");
+    return `object (${properties})`;
+  }
+  if (node.type === "object" && node.additionalProperties) {
+    return `object of ${shape(node.additionalProperties as Record<string, unknown>)}`;
+  }
+  if (node.type === "array") return `array of ${shape(node.items as Record<string, unknown>)}`;
+  if (Array.isArray(node.enum))
+    return node.enum.map((value) => `\`${String(value)}\``).join(" or ");
+  if (node.const !== undefined) return `\`${String(node.const)}\``;
+  return String(node.type ?? "unknown");
+}
+
+export function envelopeTable(): string {
+  const schema = z.toJSONSchema(sharedPropsSchema, {
+    io: "output",
+    target: "draft-2020-12",
+  }) as Record<string, unknown>;
+  const required = new Set(schema.required as string[] | undefined);
+  const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const rows = Object.entries(properties).map(
+    ([name, value]) => `| \`${name}\` | ${shape(value)} | ${required.has(name) ? "yes" : "no"} |`,
+  );
+  return ["| Field | Shape | Required |", "| --- | --- | --- |", ...rows].join("\n");
+}
+
+export function rewriteGenerated(text: string): string {
+  const start = text.indexOf(GENERATED_START);
+  const end = text.indexOf(GENERATED_END);
+  if (start < 0 || end < 0 || end < start) {
+    throw new Error(
+      `the generated envelope markers are missing or out of order (${GENERATED_START} / ${GENERATED_END})`,
+    );
+  }
+  return (
+    text.slice(0, start + GENERATED_START.length) + "\n" + envelopeTable() + "\n" + text.slice(end)
+  );
+}
+
+export function checkGenerated(text: string): Finding[] {
+  let expected: string;
+  try {
+    expected = rewriteGenerated(text);
+  } catch (error) {
+    return [{ file: "docs/contracts.md", message: (error as Error).message }];
+  }
+  return expected === text
+    ? []
+    : [
+        {
+          file: "docs/contracts.md",
+          message: "the generated envelope table is stale; run npm run docs:generate",
+        },
+      ];
+}
+
+export type HeldBackRow = { packages: string[]; pinned: string[]; why: string };
+
+type RenovateConfig = { packageRules?: unknown };
+
+function packageVersions(pkg: Record<string, unknown>): Record<string, string> {
+  const versions: Record<string, string> = {};
+  for (const group of ["dependencies", "devDependencies", "optionalDependencies", "overrides"]) {
+    const entries = pkg[group];
+    if (!entries || typeof entries !== "object") continue;
+    for (const [name, version] of Object.entries(entries as Record<string, unknown>)) {
+      if (typeof version === "string") versions[name] = version;
+    }
+  }
+  return versions;
+}
+
+// WF-06: a package held back on purpose is a Renovate rule with
+// `allowedVersions` and a description of why. The 00_README table lists the
+// ones whose package is installed, with the version package.json pins.
+export function heldBackRows(
+  renovate: unknown,
+  pkg: unknown,
+): { rows?: HeldBackRow[]; findings: Finding[] } {
+  const findings: Finding[] = [];
+  const rules = (renovate as RenovateConfig | null)?.packageRules;
+  if (!Array.isArray(rules)) {
+    return { findings: [{ file: "renovate.json5", message: "packageRules must be a list" }] };
+  }
+
+  const installed = packageVersions((pkg ?? {}) as Record<string, unknown>);
+  const rows: HeldBackRow[] = [];
+  rules.forEach((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      findings.push({ file: "renovate.json5", message: `packageRules[${index}] is not an object` });
+      return;
+    }
+
+    const rule = raw as Record<string, unknown>;
+    if (rule.allowedVersions === undefined) return;
+    const names = Array.isArray(rule.matchPackageNames)
+      ? rule.matchPackageNames.filter((name): name is string => typeof name === "string")
+      : [];
+    if (names.length === 0) {
+      findings.push({
+        file: "renovate.json5",
+        message: `packageRules[${index}] holds packages back without matchPackageNames`,
+      });
+      return;
+    }
+
+    const why = typeof rule.description === "string" ? rule.description.trim() : "";
+    if (why === "") {
+      findings.push({
+        file: "renovate.json5",
+        message: `packageRules[${index}] holds a package back without a description`,
+      });
+      return;
+    }
+
+    const present = names.filter((name) => installed[name] !== undefined);
+    if (present.length === 0) return;
+    rows.push({
+      packages: present,
+      pinned: [...new Set(present.map((name) => installed[name]))],
+      why,
+    });
+  });
+  return { rows, findings };
+}
+
+export function heldBackTable(rows: HeldBackRow[]): string {
+  const header = ["| Package | Pinned | Why |", "| --- | --- | --- |"];
+  const body = rows.map((row) => {
+    if (row.why.includes("|")) throw new Error("a held-back description contains a table pipe");
+    return `| ${row.packages.map((name) => `\`${name}\``).join(", ")} | ${row.pinned.join(", ")} | ${row.why} |`;
+  });
+  return [...header, ...body].join("\n");
+}
+
+export function rewriteHeldBack(text: string, table: string): string {
+  const start = text.indexOf(HELD_BACK_START);
+  const end = text.indexOf(HELD_BACK_END);
+  if (start < 0 || end < 0 || end < start) {
+    throw new Error(
+      `the held-back markers are missing or out of order (${HELD_BACK_START} / ${HELD_BACK_END})`,
+    );
+  }
+  return text.slice(0, start + HELD_BACK_START.length) + "\n" + table + "\n" + text.slice(end);
+}
+
+export function checkHeldBack(text: string, table: string): Finding[] {
+  let expected: string;
+  try {
+    expected = rewriteHeldBack(text, table);
+  } catch (error) {
+    return [{ file: "docs/architecture/00_README.md", message: (error as Error).message }];
+  }
+  return expected === text
+    ? []
+    : [
+        {
+          file: "docs/architecture/00_README.md",
+          message: "the generated held-back table is stale; run npm run docs:generate",
+        },
+      ];
+}
+
+export function loadHeldBack(root: string): { rows?: HeldBackRow[]; findings: Finding[] } {
+  const configPath = "renovate.json5";
+  const packagePath = "package.json";
+  if (!existsSync(resolve(root, configPath))) {
+    return { findings: [{ file: configPath, message: "the Renovate configuration is missing" }] };
+  }
+  if (!existsSync(resolve(root, packagePath))) {
+    return { findings: [{ file: packagePath, message: "package.json is missing" }] };
+  }
+
+  let renovate: unknown;
+  let pkg: unknown;
+  try {
+    renovate = JSON.parse(readFileSync(resolve(root, configPath), "utf8"));
+  } catch (error) {
+    return {
+      findings: [{ file: configPath, message: `cannot parse JSON: ${(error as Error).message}` }],
+    };
+  }
+  try {
+    pkg = JSON.parse(readFileSync(resolve(root, packagePath), "utf8"));
+  } catch (error) {
+    return {
+      findings: [{ file: packagePath, message: `cannot parse JSON: ${(error as Error).message}` }],
+    };
+  }
+  return heldBackRows(renovate, pkg);
+}
+
+// CT-01/CT-09: the CT-01 table in the spec is descriptive, so docs:check
+// compares the shared keys it names with sharedPropsSchema. Top-level keys are
+// compared as a set; `app`, `auth`, and `trace` are compared one level down
+// (auth also names viewer's own fields).
+const PAGE_KEYS = new Set(["data", "meta", "query", "pagination", "can"]);
+const NESTED_SCOPE: Record<string, "direct" | "tree"> = {
+  app: "direct",
+  auth: "tree",
+  trace: "direct",
+};
+const PROSE_TOKENS = new Set(["null", "object", "array", "string", "boolean", "number"]);
+
+function sharedSchemaProperties(): Record<string, Record<string, unknown>> {
+  const schema = z.toJSONSchema(sharedPropsSchema, {
+    io: "output",
+    target: "draft-2020-12",
+  }) as Record<string, unknown>;
+  return (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+}
+
+function identifiers(node: unknown, tree: boolean): Set<string> {
+  const found = new Set<string>();
+  const walk = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    const object = value as Record<string, unknown>;
+    if (Array.isArray(object.anyOf)) {
+      object.anyOf.forEach(walk);
+      return;
+    }
+    if (object.type !== "object" || !object.properties) return;
+    for (const [key, entry] of Object.entries(object.properties as Record<string, unknown>)) {
+      found.add(key);
+      if (tree) walk(entry);
+    }
+  };
+  walk(node);
+  return found;
+}
+
+function ct01Rows(text: string): { key: string; purpose: string }[] | undefined {
+  const heading = text.indexOf("### CT-01");
+  if (heading < 0) return undefined;
+
+  const rows: { key: string; purpose: string }[] = [];
+  let inTable = false;
+  for (const line of text.slice(heading).split("\n")) {
+    if (!line.trimStart().startsWith("|")) {
+      if (inTable) break;
+      continue;
+    }
+    const cells = line
+      .split("|")
+      .slice(1, -1)
+      .map((cell) => cell.trim());
+    if (cells.length < 3) continue;
+    const key = cells[0].match(/^`([^`]+)`$/);
+    if (!key) continue;
+    inTable = true;
+    rows.push({ key: key[1], purpose: cells.slice(2).join(" | ") });
+  }
+  return inTable ? rows : undefined;
+}
+
+export function checkEnvelopeTable(text: string): Finding[] {
+  const rows = ct01Rows(text);
+  if (!rows) {
+    return [
+      {
+        file: "docs/architecture/04_contracts.md",
+        message: "the CT-01 envelope table is missing",
+      },
+    ];
+  }
+
+  const findings: Finding[] = [];
+  const schema = sharedSchemaProperties();
+  const tableKeys = new Set(rows.map((row) => row.key));
+  const shared = new Set([...tableKeys].filter((key) => !PAGE_KEYS.has(key)));
+  const expected = new Set(Object.keys(schema));
+
+  for (const key of expected) {
+    if (!shared.has(key)) {
+      findings.push({
+        file: "docs/architecture/04_contracts.md",
+        message: `the CT-01 table is missing shared key ${key}`,
+      });
+    }
+  }
+  for (const key of shared) {
+    if (!expected.has(key)) {
+      findings.push({
+        file: "docs/architecture/04_contracts.md",
+        message: `the CT-01 table names an unknown shared key ${key}`,
+      });
+    }
+  }
+
+  for (const [key, scope] of Object.entries(NESTED_SCOPE)) {
+    const row = rows.find((candidate) => candidate.key === key);
+    if (!row) continue;
+    const wanted = identifiers(schema[key], scope === "tree");
+    const named = new Set(
+      [...row.purpose.matchAll(/`([^`]+)`/g)]
+        .map((match) => match[1])
+        .filter((token) => /^[a-z][A-Za-z0-9]*$/.test(token) && !PROSE_TOKENS.has(token)),
+    );
+    for (const name of wanted) {
+      if (!named.has(name)) {
+        findings.push({
+          file: "docs/architecture/04_contracts.md",
+          message: `the CT-01 table is missing ${key}.${name}`,
+        });
+      }
+    }
+    for (const name of named) {
+      if (!wanted.has(name)) {
+        findings.push({
+          file: "docs/architecture/04_contracts.md",
+          message: `the CT-01 table names an unknown ${key} key ${name}`,
+        });
+      }
+    }
+  }
+
+  return findings;
+}

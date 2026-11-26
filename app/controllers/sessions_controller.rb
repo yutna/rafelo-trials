@@ -1,0 +1,104 @@
+# frozen_string_literal: true
+
+class SessionsController < ApplicationController
+  skip_before_action :load_session, only: %i[new create]
+  skip_before_action :refresh_stale_grants, only: %i[new create]
+  skip_before_action :require_viewer, only: %i[new create]
+  before_action :skip_authorization
+
+  throttle to: 10, within: 1.minute, only: :create, name: "sign_in/ip"
+  throttle to: 30, within: 1.minute, only: :destroy, name: "sign_out/ip"
+  throttle to: 10, within: 1.minute, only: :destroy_all, name: "sign_out_everywhere/ip"
+
+  def new
+    return_to = Rafelo::Core::ReturnTo.from(params, locale: I18n.locale).to_s
+    return_to = nil if return_to == "/#{I18n.locale}"
+    render_page "sessions/new", props: SessionsNewProps.new(
+      context: page_context, csrf_token: form_authenticity_token, return_to: return_to
+    )
+  end
+
+  def create
+    result = Rafelo::Core::AuthGateway.new(
+      budget: Rafelo::Core::CallBudget.default(deadline: request_deadline),
+      request_id: request.request_id,
+      trace_id: Rafelo::Core::Current.trace_id,
+      trace_sampled: Rafelo::Core::Current.trace_sampled
+    ).sign_in(email: params[:email], password: params[:password])
+    Rafelo::Core::Session.find_by_token(cookies[session_cookie_name])&.destroy if cookies[session_cookie_name]
+    reset_session
+    session, token = Rafelo::Core::Session.start(
+      viewer: result.viewer,
+      access_token: result.access_token,
+      refresh_token: result.refresh_token,
+      access_expires_at: result.access_expires_at,
+      locale: I18n.locale,
+      grants: result.grants
+    )
+    Rafelo::Core::AuditRecorder.record(
+      controller: self,
+      event: "sign_in",
+      outcome: "success",
+      target: "sign_in",
+      viewer_id: result.viewer.id
+    )
+    request.env["rafelo.log.viewer"] = Rafelo::Core::LogPayload.opaque_viewer(result.viewer.id)
+    cookies[session_cookie_name] = {
+      value: token,
+      httponly: true,
+      same_site: :lax,
+      secure: !Rails.env.local?,
+      expires: session.expires_at
+    }
+    redirect_to Rafelo::Core::ReturnTo.from(params, locale: I18n.locale).to_s, status: :see_other
+  rescue Rafelo::Core::ApplicationError => error
+    # BE-13: only a refused credential is a form error. An upstream outage or
+    # a forbidden answer renders the shared error page.
+    return render_application_error(error) unless error.code == "auth.expired"
+
+    Rafelo::Core::AuditRecorder.record(
+      controller: self,
+      event: "sign_in",
+      outcome: "failure",
+      target: "sign_in"
+    )
+    failure = Rafelo::Core::ApplicationError.new("auth.failed")
+    Rafelo::Core::ErrorReporter.report(failure, handled: true)
+    fallback = "/#{I18n.locale}"
+    return_to = Rafelo::Core::ReturnTo.from(params, locale: I18n.locale).to_s
+    target = return_to == fallback ? "#{fallback}/sign_in" : "#{fallback}/sign_in?return_to=#{ERB::Util.url_encode(return_to)}"
+    redirect_to target,
+                status: :see_other,
+                inertia: { errors: { "base" => failure.message } }
+  end
+
+  def destroy
+    token = cookies[session_cookie_name]
+    if Rafelo::Core::Current.viewer
+      Rafelo::Core::AuditRecorder.record(
+        controller: self,
+        event: "sign_out",
+        outcome: "success",
+        target: "sign_out"
+      )
+    end
+    Rafelo::Core::Session.find_by_token(token)&.destroy if token
+    reset_session
+    cookies.delete(session_cookie_name, secure: !Rails.env.local?, path: "/")
+    redirect_to "/#{I18n.locale}/sign_in", status: :see_other, inertia: { clear_history: true }
+  end
+
+  def destroy_all
+    if Rafelo::Core::Current.viewer
+      Rafelo::Core::AuditRecorder.record(
+        controller: self,
+        event: "sign_out_everywhere",
+        outcome: "success",
+        target: "sign_out_everywhere"
+      )
+      Rafelo::Core::Session.revoke_all!(Rafelo::Core::Current.viewer.id)
+    end
+    clear_session!
+    redirect_to "/#{I18n.locale}/sign_in", status: :see_other, inertia: { clear_history: true }
+  end
+end

@@ -1,0 +1,16 @@
+<% runtime_role = Rails.env.production? ? (ENV["DB_USER"].presence || raise("DB_USER is required")) : ENV.fetch("DB_USER", "postgres") %>
+default: &default
+  puma_threads: <%= ENV.fetch("RAILS_MAX_THREADS", 3) %>
+  executor:
+    size: 4
+  process:
+    role: <%= ENV.fetch("KAMAL_ROLE", "web") %>
+  database:
+    runtime_role: <%= runtime_role %>
+
+development:
+  <<: *default
+test:
+  <<: *default
+production:
+  <<: *default

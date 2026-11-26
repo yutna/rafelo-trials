@@ -1,0 +1,16 @@
+{
+  "grants": [
+    "billing:invoice:create",
+    "billing:invoice:read",
+    "example_orders:order:create",
+    "example_orders:order:export",
+    "example_orders:order:read",
+    "example_orders:order:update"
+  ],
+  "generated": [
+    "example_orders:order:create",
+    "example_orders:order:export",
+    "example_orders:order:read",
+    "example_orders:order:update"
+  ]
+}

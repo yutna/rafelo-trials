@@ -1,0 +1,254 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "bundler"
+require "json"
+require "optparse"
+
+root = Dir.pwd
+only_gems = false
+OptionParser.new do |parser|
+  parser.banner = "Usage: script/ci/pins [--root DIR] [--only-gems]"
+  parser.on("--root DIR") { |value| root = value }
+  parser.on("--only-gems") { only_gems = true }
+end.parse!
+
+root = File.expand_path(root)
+abort "pins: root does not exist: #{root}" unless Dir.exist?(root)
+
+errors = []
+checks = 0
+exact_version = /\A\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?\z/
+
+# WF-06's peer sets. A package present in package.json must be grouped under
+# its set's groupName, in exactly one rule; a member outside its group fails.
+PEER_SETS = {
+  "typescript" => %w[typescript typescript-eslint],
+  "vite" => %w[vite @vitejs/plugin-react vite-plugin-ruby @rolldown/plugin-babel],
+  "react" => %w[react react-dom @types/react @types/react-dom eslint-plugin-react-hooks],
+  "vitest" => %w[vitest @vitest/coverage-v8],
+  "tailwindcss" => %w[tailwindcss @tailwindcss/vite prettier-plugin-tailwindcss],
+  "eslint" => %w[eslint @eslint/js]
+}.freeze
+
+def read(root, path)
+  full = File.join(root, path)
+  abort "pins: missing #{path}" unless File.file?(full)
+
+  File.read(full)
+end
+
+if only_gems
+  errors = []
+  checks = 0
+  begin
+    lockfile = File.join(root, "Gemfile.lock")
+    definition = Bundler::Definition.build(File.join(root, "Gemfile"), File.file?(lockfile) ? lockfile : nil, {})
+    definition.dependencies.each do |dependency|
+      checks += 1
+      next if dependency.source.is_a?(Bundler::Source::Path)
+
+      requirement = dependency.requirement
+      exact = requirement.requirements.length == 1 && requirement.requirements.first.first == "="
+      errors << "Gemfile #{dependency.name} is not exact: #{requirement}" unless exact
+    end
+
+    engine_names = Dir[File.join(root, "engines", "*", "*.gemspec")].map { |path| File.basename(path, ".gemspec") }
+    allowed_dependencies = definition.dependencies.map(&:name) + engine_names
+    Dir[File.join(root, "engines", "*", "*.gemspec")].each do |path|
+      specification = Gem::Specification.load(path)
+      if specification.nil?
+        errors << "#{path.delete_prefix("#{root}/")} could not be loaded"
+        next
+      end
+
+      specification.dependencies.each do |dependency|
+        checks += 1
+        errors << "gemspec #{dependency.name} states a version constraint" unless dependency.requirement == Gem::Requirement.default
+        unless allowed_dependencies.include?(dependency.name)
+          errors << "gemspec #{dependency.name} is not pinned in the Gemfile or supplied by an engine"
+        end
+      end
+    end
+  rescue StandardError => error
+    errors << "Bundler evaluation failed: #{error.message}"
+  end
+
+  if errors.any?
+    errors.each { |error| warn "pins: #{error}" }
+    warn "pins: checked #{checks} gems; errors=#{errors.length}"
+    exit 1
+  end
+
+  warn "pins: checked #{checks} gems; errors=0"
+  exit 0
+end
+
+mise = read(root, "mise.toml").scan(/^([a-z]+) = "([^"]+)"$/).to_h
+%w[ruby node npm].each do |tool|
+  checks += 1
+  errors << "mise.toml: #{tool} is not exact" unless mise[tool]&.match?(exact_version)
+end
+
+ruby_version = read(root, ".ruby-version").strip.sub(/^ruby-/, "")
+checks += 1
+errors << ".ruby-version does not match mise.toml" unless ruby_version == mise["ruby"]
+
+package = JSON.parse(read(root, "package.json"))
+checks += 1
+errors << "packageManager does not match mise.toml" unless package["packageManager"] == "npm@#{mise["npm"]}"
+
+%w[dependencies devDependencies optionalDependencies overrides].each do |group|
+  (package[group] || {}).each do |name, version|
+    checks += 1
+    errors << "package.json #{group}.#{name} is not exact: #{version.inspect}" unless version.to_s.match?(exact_version)
+  end
+end
+
+checks += 1
+errors << "package.json engines do not match mise.toml" unless package.dig("engines", "node") == mise["node"] && package.dig("engines", "npm") == mise["npm"]
+checks += 1
+errors << "package.json devEngines do not match mise.toml" unless package.dig("devEngines", "runtime", "version") == mise["node"] && package.dig("devEngines", "packageManager", "version") == mise["npm"]
+checks += 1
+errors << "package.json devEngines do not fail on mismatch" unless package.dig("devEngines", "runtime", "onFail") == "error" && package.dig("devEngines", "packageManager", "onFail") == "error"
+
+installed = %w[dependencies devDependencies optionalDependencies overrides]
+  .flat_map { |group| (package[group] || {}).keys }
+if File.file?(File.join(root, "renovate.json5"))
+  begin
+    renovate = JSON.parse(read(root, "renovate.json5"))
+    grouped = Hash.new { |hash, key| hash[key] = [] }
+    rules_by_group = Hash.new { |hash, key| hash[key] = [] }
+    Array(renovate["packageRules"]).each do |rule|
+      group = rule["groupName"]
+      next if group.nil?
+
+      names = Array(rule["matchPackageNames"])
+      rules_by_group[group] << names
+      names.each { |name| grouped[name] << group }
+    end
+
+    PEER_SETS.each do |group, names|
+      present = names & installed
+      next if present.empty?
+
+      checks += 1
+      entries = rules_by_group[group]
+      if entries.length != 1
+        errors << "renovate.json5 has #{entries.length} #{group} peer-group rules, expected exactly one"
+      else
+        missing = present - entries.first
+        errors << "renovate.json5 #{group} peer group is missing #{missing.join(', ')}" if missing.any?
+      end
+
+      present.each do |name|
+        checks += 1
+        errors << "renovate.json5 #{name} is in #{grouped[name].inspect}, not the #{group} peer group" unless grouped[name] == [ group ]
+      end
+    end
+  rescue JSON::ParserError => error
+    errors << "renovate.json5 cannot be parsed: #{error.message}"
+  end
+else
+  errors << "renovate.json5 is missing"
+end
+
+gemfile = read(root, "Gemfile")
+checks += 1
+errors << "Gemfile does not read .ruby-version" unless gemfile.include?('ruby file: ".ruby-version"')
+checks += 1
+errors << "Gemfile.lock is missing" unless File.file?(File.join(root, "Gemfile.lock"))
+
+begin
+  definition = Bundler::Definition.build(
+    File.join(root, "Gemfile"),
+    File.join(root, "Gemfile.lock"),
+    {}
+  )
+  definition.dependencies.each do |dependency|
+    checks += 1
+    next if dependency.source.is_a?(Bundler::Source::Path)
+
+    requirement = dependency.requirement
+    exact = requirement.requirements.length == 1 && requirement.requirements.first.first == "="
+    errors << "Gemfile #{dependency.name} is not exact: #{requirement}" unless exact
+
+    if dependency.source.is_a?(Bundler::Source::Git)
+      ref = dependency.source.ref.to_s
+      errors << "Gemfile #{dependency.name} git ref is not a full SHA" unless ref.match?(/\A[0-9a-f]{40}\z/)
+    end
+  end
+
+  engine_names = Dir[File.join(root, "engines", "*", "*.gemspec")].map { |path| File.basename(path, ".gemspec") }
+  allowed_dependencies = definition.dependencies.map(&:name) + engine_names
+  Dir[File.join(root, "engines", "*", "*.gemspec")].each do |path|
+    specification = Gem::Specification.load(path)
+    if specification.nil?
+      errors << "#{path.delete_prefix("#{root}/")} could not be loaded"
+      next
+    end
+
+    specification.dependencies.each do |dependency|
+      checks += 1
+      errors << "gemspec #{dependency.name} states a version constraint" unless dependency.requirement == Gem::Requirement.default
+      unless allowed_dependencies.include?(dependency.name)
+        errors << "gemspec #{dependency.name} is not pinned in the Gemfile or supplied by an engine"
+      end
+    end
+  end
+rescue StandardError => error
+  errors << "Bundler evaluation failed: #{error.message}"
+end
+
+dockerfile = read(root, "Dockerfile")
+checks += 1
+errors << "Dockerfile ARG RUBY_VERSION does not match mise.toml" unless dockerfile.match?(/^ARG RUBY_VERSION=#{Regexp.escape(mise["ruby"])}$/)
+checks += 1
+errors << "Dockerfile Node image is not pinned to mise node" unless dockerfile.match?(/^FROM node:#{Regexp.escape(mise["node"])}-slim AS node$/)
+
+devcontainer_dockerfile = read(root, ".devcontainer/Dockerfile")
+checks += 1
+errors << ".devcontainer/Dockerfile ARG RUBY_VERSION does not match mise.toml" unless devcontainer_dockerfile.match?(/^ARG RUBY_VERSION=#{Regexp.escape(mise["ruby"])}$/)
+checks += 1
+errors << ".devcontainer/Dockerfile base image is not digest-pinned" unless devcontainer_dockerfile.match?(/@sha256:[0-9a-f]{64}/)
+
+image_digest = read(root, ".devcontainer/image_digest").strip
+checks += 1
+unless image_digest.match?(%r{\Aghcr\.io/[a-z0-9_.-]+/[a-z0-9_.-]+-devcontainer@sha256:[0-9a-f]{64}\z})
+  errors << ".devcontainer/image_digest is not a digest-pinned GHCR reference"
+end
+
+compose = read(root, ".devcontainer/compose.yaml")
+checks += 1
+errors << "PostgreSQL image is not version/digest pinned" unless compose.match?(/image:\s+postgres:\d+\.\d+@sha256:[0-9a-f]{64}/)
+checks += 1
+errors << ".devcontainer/compose.yaml does not use the recorded image" unless compose.include?(image_digest)
+
+devcontainer = read(root, ".devcontainer/devcontainer.json")
+stripped = devcontainer.lines.reject { |line| line.lstrip.start_with?("//") }.join
+parsed = JSON.parse(stripped)
+checks += 1
+errors << "devcontainer.json does not reference the recorded image digest" unless devcontainer.include?(image_digest)
+features = parsed.fetch("features", {})
+checks += 1
+errors << "devcontainer features are not exactly versioned" unless features.keys.all? { |name| name.match?(/:\d+\.\d+\.\d+$/) }
+checks += 1
+errors << "devcontainer.json must forward ports 3000 and 3036" unless [ 3000, 3036 ].all? { |port| Array(parsed["forwardPorts"]).include?(port) }
+checks += 1
+errors << "devcontainer.json must bind Vite to 0.0.0.0" unless parsed.dig("containerEnv", "BINDING") == "0.0.0.0"
+
+checks += 1
+errors << ".gitattributes must force LF" unless read(root, ".gitattributes").match?(/^\* text=auto eol=lf$/)
+
+checks += 1
+errors << "package-lock.json is missing" unless File.file?(File.join(root, "package-lock.json"))
+checks += 1
+errors << ".npmrc must set save-exact=true" unless read(root, ".npmrc").include?("save-exact=true")
+
+if errors.any?
+  errors.each { |error| warn "pins: #{error}" }
+  warn "pins: checked #{checks} pins; errors=#{errors.length}"
+  exit 1
+end
+
+warn "pins: checked #{checks} pins; errors=0"

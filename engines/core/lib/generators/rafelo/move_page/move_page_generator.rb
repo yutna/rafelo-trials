@@ -1,0 +1,477 @@
+# frozen_string_literal: true
+
+require "rails/generators"
+require "yaml"
+require_relative "../base/grant_catalog"
+require_relative "../base/post_write"
+
+module Rafelo
+  module Generators
+    class MovePageGenerator < Rails::Generators::Base
+      include PostWrite
+
+      argument :source_module, type: :string
+      argument :target_module, type: :string
+      argument :resource, type: :string
+      class_option :skip_post_write, type: :boolean, default: false
+
+      def move
+        @source = source_module.to_s.underscore
+        @target = target_module.to_s.underscore
+        @res = resource.to_s.underscore
+        @root = Pathname.new(destination_root || Dir.pwd)
+        validate!
+        @snapshot = snapshot
+        perform_move
+        post_write unless options[:skip_post_write]
+        say "Moved #{@source}/#{@res} to #{@target}/#{@res}.", :green
+      rescue StandardError => e
+        restore_snapshot(@snapshot) if defined?(@snapshot)
+        raise Thor::Error, "generator rolled back after: #{e.message}"
+      end
+
+      private
+
+      attr_reader :root
+
+      def validate!
+        raise Thor::Error, "source engine not found" unless Dir.exist?(root.join("engines", @source))
+        raise Thor::Error, "target engine not found" unless Dir.exist?(root.join("engines", @target))
+
+        source_routes = root.join("engines", @source, "config/routes.rb")
+        raise Thor::Error, "source routes not found" unless File.file?(source_routes)
+        unless File.read(source_routes).include?("resources :#{plural}")
+          raise Thor::Error, "resource not found in source module: #{plural}"
+        end
+
+        target_routes = root.join("engines", @target, "config/routes.rb")
+        if File.file?(target_routes) && File.read(target_routes).include?("resources :#{plural}")
+          raise Thor::Error, "resource already exists in target module: #{plural}"
+        end
+        if Dir.exist?(root.join("engines", @target, "app/frontend/pages/#{plural}")) ||
+           File.exist?(root.join("engines", @target, "app/controllers/#{app_ns_underscore}/#{@target}/#{plural}_controller.rb"))
+          raise Thor::Error, "resource already exists in target module: #{plural}"
+        end
+      end
+
+      def app_namespace = Rails.application.class.module_parent_name
+      def app_ns_underscore = app_namespace.gsub(/([a-z\d])([A-Z])/, '\\1_\\2').downcase
+
+      def manifest_for(name)
+        path = root.join("engines", name, "config/module.rb")
+        File.file?(path) ? File.read(path) : ""
+      end
+
+      def permission_prefix_for(name)
+        manifest_for(name)[/permission_prefixes:\s*\[(.*?)\]/m, 1]
+          &.scan(/"([^"]+)"|'([^']+)'/)&.flatten&.compact&.first || name
+      end
+
+      def permission_prefix_containing(name, resource)
+        path = root.join("engines", name, "config/permissions.yml")
+        return permission_prefix_for(name) unless File.file?(path)
+
+        manifest = YAML.safe_load(File.read(path), aliases: false) || {}
+        manifest.find { |_prefix, resources| resources.is_a?(Hash) && resources.key?(resource) }&.first ||
+          permission_prefix_for(name)
+      end
+
+      def route_segment_for(name)
+        manifest_for(name)[/path:\s*["']([^"']+)["']/, 1]&.delete_prefix("/") || name
+      end
+
+      def source_permission_prefix = @source_permission_prefix ||= permission_prefix_containing(@source, plural)
+      def target_permission_prefix = @target_permission_prefix ||= permission_prefix_for(@target)
+      def source_route_segment = @source_route_segment ||= route_segment_for(@source)
+      def target_route_segment = @target_route_segment ||= route_segment_for(@target)
+
+      def rewrite_route_segment(body)
+        pattern = %r{(?<![\w-])#{Regexp.escape(source_route_segment)}/#{Regexp.escape(plural)}(?![\w-])}
+        body.gsub(pattern, "#{target_route_segment}/#{plural}")
+      end
+
+      def rewrite_page_key(body)
+        pattern = %r{(?<![\w-])#{Regexp.escape(@source)}/#{Regexp.escape(plural)}(?![\w-])}
+        body.gsub(pattern, "#{@target}/#{plural}")
+      end
+
+      def plural = @res.pluralize
+      def singular = @res.singularize
+
+      def perform_move
+        move_frontend_trees
+        move_engine_files("app/controllers/#{app_ns_underscore}/#{@source}", "app/controllers/#{app_ns_underscore}/#{@target}")
+        move_engine_files("app/policies/#{app_ns_underscore}/#{@source}", "app/policies/#{app_ns_underscore}/#{@target}")
+        move_engine_files("app/props/#{app_ns_underscore}/#{@source}", "app/props/#{app_ns_underscore}/#{@target}")
+        move_engine_files("app/forms/#{app_ns_underscore}/#{@source}", "app/forms/#{app_ns_underscore}/#{@target}")
+        move_engine_files("app/gateways/#{app_ns_underscore}/#{@source}", "app/gateways/#{app_ns_underscore}/#{@target}")
+        move_engine_files("app/models/#{app_ns_underscore}/#{@source}", "app/models/#{app_ns_underscore}/#{@target}")
+        move_engine_files("app/jobs/#{app_ns_underscore}/#{@source}", "app/jobs/#{app_ns_underscore}/#{@target}")
+        move_engine_files("spec", "spec")
+        move_engine_files("spec/requests", "spec/requests")
+        move_engine_files("e2e", "e2e")
+        move_root_e2e
+        move_tree("config/contracts/pages/#{plural}", "config/contracts/pages/#{plural}")
+        move_tree("config/contracts/pages/#{singular}", "config/contracts/pages/#{singular}")
+        move_tree("spec/fixtures/upstream/#{plural}", "spec/fixtures/upstream/#{plural}")
+        move_tree("spec/fixtures/upstream/#{singular}", "spec/fixtures/upstream/#{singular}")
+
+        move_page_budgets
+        move_copy
+        copy_i18n_hook
+        rewrite_target_contents
+        move_root_request_specs
+        rewrite_routes
+        move_permissions
+        add_legacy_path
+        add_legacy_redirect_spec
+        move_table_metadata
+      end
+
+      def move_frontend_trees
+        %w[pages screens containers components hooks domain forms].each do |kind|
+          [ plural, singular ].uniq.each do |name|
+            move_tree("app/frontend/#{kind}/#{name}", "app/frontend/#{kind}/#{name}")
+          end
+        end
+      end
+
+      def move_tree(from_rel, to_rel)
+        from = root.join("engines", @source, from_rel)
+        to = root.join("engines", @target, to_rel)
+        return unless File.exist?(from)
+
+        FileUtils.mkdir_p(File.dirname(to))
+        FileUtils.mv(from, to)
+      end
+
+      def move_engine_files(from_dir_rel, to_dir_rel)
+        move_files_between(
+          root.join("engines", @source, from_dir_rel),
+          root.join("engines", @target, to_dir_rel)
+        )
+      end
+
+      def move_app_files(from_dir_rel, to_dir_rel)
+        move_files_between(root.join(from_dir_rel), root.join(to_dir_rel))
+      end
+
+      # A slice file carries the resource's singular or plural name. Moving both
+      # patterns catches widgets_gateway.rb (plural) and widget_export_job.rb
+      # (singular) without touching the engine's other resources.
+      def move_files_between(from_dir, to_dir)
+        return [] unless Dir.exist?(from_dir)
+
+        files = [ plural, singular ].uniq.flat_map { |name| Dir[from_dir.join("*#{name}*")] }
+          .select { |path| File.file?(path) }.uniq
+        return [] if files.empty?
+
+        FileUtils.mkdir_p(to_dir)
+        files.each { |path| FileUtils.mv(path, to_dir.join(File.basename(path))) }
+        files
+      end
+
+      def move_page_budgets
+        src_path = root.join("engines", @source, "config/budgets.yml")
+        tgt_path = root.join("engines", @target, "config/budgets.yml")
+        return unless File.file?(src_path) && File.file?(tgt_path)
+
+        src = YAML.safe_load(File.read(src_path), aliases: false) || {}
+        tgt = YAML.safe_load(File.read(tgt_path), aliases: false) || {}
+        src_pages = src["pages"] || {}
+        tgt_pages = tgt["pages"] || {}
+        prefix = "#{@source}/#{plural}/"
+        moved = src_pages.keys.select { |key| key.start_with?(prefix) }
+        return if moved.empty?
+
+        moved.each { |key| tgt_pages[key.sub(prefix, "#{@target}/#{plural}/")] = src_pages.delete(key) }
+        src["pages"] = src_pages
+        tgt["pages"] = tgt_pages
+        File.write(src_path, YAML.dump(src))
+        File.write(tgt_path, YAML.dump(tgt))
+      end
+
+      def move_copy
+        Dir[root.join("engines", @source, "config/locales/*.yml")].sort.each do |src_path|
+          locale = File.basename(src_path, ".yml")
+          src = YAML.safe_load(File.read(src_path), aliases: false) || {}
+          copy = src.dig(locale, @source, plural)
+          next unless copy
+
+          src[locale][@source].delete(plural)
+          tgt_path = root.join("engines", @target, "config/locales/#{locale}.yml")
+          tgt = File.file?(tgt_path) ? YAML.safe_load(File.read(tgt_path), aliases: false) || {} : { locale => {} }
+          tgt[locale] ||= {}
+          tgt[locale][@target] ||= {}
+          tgt[locale][@target][plural] = copy
+          File.write(src_path, YAML.dump(src))
+          File.write(tgt_path, YAML.dump(tgt))
+        end
+      end
+
+      def copy_i18n_hook
+        src_path = root.join("engines", @source, "app/frontend/i18n.ts")
+        tgt_path = root.join("engines", @target, "app/frontend/i18n.ts")
+        return unless File.file?(src_path)
+        return if File.exist?(tgt_path)
+
+        body = File.read(src_path)
+          .gsub("use#{@source.camelize}Translation", "use#{@target.camelize}Translation")
+          .gsub(%(ns: "#{@source}"), %(ns: "#{@target}"))
+        FileUtils.mkdir_p(tgt_path.dirname)
+        File.write(tgt_path, body)
+      end
+
+      def move_table_metadata
+        migrations = [ plural, singular ].uniq.flat_map do |name|
+          Dir[root.join("engines", @source, "db/migrate/*#{name}*")]
+        end
+        return if migrations.empty?
+
+        package_path = root.join("engines", @target, "package.yml")
+        return unless File.file?(package_path)
+
+        package = YAML.safe_load(File.read(package_path), aliases: false) || {}
+        metadata = package["metadata"] || {}
+        return if metadata.key?("legacy_table_prefix")
+
+        metadata["legacy_table_prefix"] = @source
+        package["metadata"] = metadata
+        File.write(package_path, YAML.dump(package))
+
+        ratchet_path = root.join("engines", @target, "config/ratchets.yml")
+        return unless File.file?(ratchet_path)
+
+        ratchets = YAML.safe_load(File.read(ratchet_path), aliases: false) || {}
+        ratchets["legacy_table_prefixes"] = ratchets.fetch("legacy_table_prefixes", 0).to_i + 1
+        File.write(ratchet_path, YAML.dump(ratchets))
+      end
+
+      def rewrite_target_contents
+        Dir[root.join("engines", @target, "**/*")].select { |p| File.file?(p) }.each do |path|
+          body = File.binread(path)
+          next if body.include?("\x00")
+
+          changed = body.dup
+          changed = changed.gsub("#{app_namespace}::#{@source.camelize}", "#{app_namespace}::#{@target.camelize}")
+          changed = changed.gsub("@#{@source}/", "@#{@target}/")
+          changed = changed.gsub("module #{@source.camelize}", "module #{@target.camelize}") # unlikely but safe
+          changed = changed.gsub("use#{@source.camelize}Translation", "use#{@target.camelize}Translation")
+          changed = changed.gsub("engines/#{@source}/", "engines/#{@target}/")
+          changed = rewrite_route_segment(changed)
+          changed = rewrite_page_key(changed)
+          changed = changed.gsub("#{@source}.#{plural}.", "#{@target}.#{plural}.")
+          changed = changed.gsub(":#{@source},", ":#{@target},")
+          File.binwrite(path, changed) if changed != body
+        end
+      end
+
+      def move_root_request_specs
+        move_app_files("spec/requests/#{@source}", "spec/requests/#{@target}").each do |path|
+          moved_path = root.join("spec/requests", @target, File.basename(path))
+          body = File.read(moved_path)
+          body = body.gsub("engines/#{@source}/", "engines/#{@target}/")
+          body = rewrite_route_segment(body)
+          body = rewrite_page_key(body)
+          File.write(moved_path, body)
+        end
+      end
+
+      def move_root_e2e
+        move_app_files("e2e/#{@source}", "e2e/#{@target}").each do |path|
+          moved_path = root.join("e2e", @target, File.basename(path))
+          body = File.read(moved_path)
+          body = rewrite_route_segment(body)
+          body = body.gsub("#{@source}.#{plural}.", "#{@target}.#{plural}.")
+          body = body.gsub("@#{@source}/", "@#{@target}/")
+          File.write(moved_path, body)
+        end
+      end
+
+      def rewrite_routes
+        src_path = root.join("engines", @source, "config/routes.rb")
+        src = File.read(src_path)
+        source_line = src[/^\s*resources :#{plural}[^\n]*\n/]
+        only = source_line&.[](/only:\s*%i\[([^\]]*)\]/, 1)
+        moved_had_index = src.match?(/resources :#{plural}[^\n]*index/) || src.match?(/resources :#{plural}(?![^\n]*only:)/)
+        moved_was_root = src.match?(/^\s*root to:\s*"#{plural}#index"/)
+        src = src.gsub(/^\s*resources :#{plural}[^\n]*\n/, "")
+        if moved_was_root
+          next_index = src[/^\s*resources :(\w+)[^\n]*\bindex\b/, 1] || src[/^\s*resources :(\w+)(?![^\n]*only:)/, 1]
+          if next_index
+            src = src.sub(/^\s*root to:.*\n/, "    root to: \"#{next_index}#index\"\n")
+          else
+            src = src.gsub(/^\s*root to:.*\n/, "")
+          end
+        end
+        File.write(src_path, src)
+
+        tgt_path = root.join("engines", @target, "config/routes.rb")
+        tgt = File.read(tgt_path)
+        unless tgt.include?("resources :#{plural}")
+          root_line = (!tgt.include?("root to:") && moved_had_index) ? "    root to: \"#{plural}#index\"\n" : ""
+          only_clause = only ? ", only: %i[#{only}]" : ""
+          tgt = tgt.sub("Engine.routes.draw do\n", "Engine.routes.draw do\n    resources :#{plural}#{only_clause}\n#{root_line}")
+        end
+        File.write(tgt_path, tgt)
+      end
+
+      def move_permissions
+        src_path = root.join("engines", @source, "config/permissions.yml")
+        tgt_path = root.join("engines", @target, "config/permissions.yml")
+        src = YAML.safe_load(File.read(src_path), aliases: false) || {}
+        tgt = YAML.safe_load(File.read(tgt_path), aliases: false) || {}
+        src_prefix = source_permission_prefix
+        # v0.42 keys a page's permission by the singular resource; a page
+        # generated before that keeps its plural key and must move as it is.
+        resource = [ singular, plural ].find { |key| src.dig(src_prefix, key) }
+        actions = src.dig(src_prefix, resource)
+        return unless actions
+
+        src[src_prefix].delete(resource)
+        # Keep permission keys stable by preserving the source prefix in the target manifest.
+        tgt[src_prefix] ||= {}
+        tgt[src_prefix][resource] = actions
+        # The target's seed entry for the same resource is a placeholder, not a
+        # route: keeping it would generate a duplicate constant for the key the
+        # move just brought under the source prefix.
+        tgt[target_permission_prefix]&.delete(resource) unless target_permission_prefix == src_prefix
+        File.write(src_path, YAML.dump(src))
+        File.write(tgt_path, YAML.dump(tgt))
+      end
+
+      def add_legacy_path
+        old_prefix = "/#{source_route_segment}/#{plural}"
+        target_prefix = "/#{target_route_segment}/#{plural}"
+        target_suffix = "/#{plural}"
+        source_paths = legacy_paths_for(@source)
+        # A second move inherits the earlier resource URLs instead of dropping
+        # them when the source engine stops serving the resource. The target's
+        # own current URL is never a legacy path.
+        transferred = source_paths.select do |old, target|
+          target == target_suffix && old != target_prefix
+        end
+        write_legacy_paths(@source, source_paths.reject { |old, target| target == target_suffix || old == target_prefix })
+        target_paths = legacy_paths_for(@target).merge(transferred)
+        target_paths.delete(target_prefix)
+        target_paths[old_prefix] = target_suffix unless old_prefix == target_prefix
+        write_legacy_paths(@target, target_paths)
+
+        path = root.join("engines", @target, "config/module.rb")
+        content = File.read(path)
+        if content =~ /permission_prefixes:\s*\[([^\]]*)\]/
+          prefixes = $1.scan(/"([^"]+)"/).flatten
+          unless prefixes.include?(source_permission_prefix)
+            prefixes << source_permission_prefix
+            content = content.sub(/permission_prefixes:\s*\[[^\]]*\]/, "permission_prefixes: [ #{prefixes.map { |p| "\"#{p}\"" }.join(", ")} ]")
+            File.write(path, content)
+          end
+        end
+      end
+
+      def legacy_paths_for(name)
+        match = manifest_for(name).match(/legacy_paths:\s*\{(.*?)\}/m)
+        return {} unless match
+
+        match[1].scan(/["']([^"']+)["']\s*=>\s*["']([^"']*)["']/).to_h
+      end
+
+      def write_legacy_paths(name, paths)
+        path = root.join("engines", name, "config/module.rb")
+        content = File.read(path)
+        rendered = if paths.empty?
+          nil
+        else
+          "{ #{paths.map { |old, target| "\"#{old}\" => \"#{target}\"" }.join(", ")} }"
+        end
+
+        if content.match?(/legacy_paths:/)
+          if rendered
+            content = content.sub(/legacy_paths:\s*\{.*?\}/m, "legacy_paths: #{rendered}")
+          else
+            content = remove_legacy_paths(content, name)
+          end
+        elsif rendered
+          insertion = "  legacy_paths: #{rendered},\n"
+          if content =~ /^(\s*permission_prefixes:.*\n)/
+            content = content.sub(/^(\s*permission_prefixes:.*\n)/, "\\1#{insertion}")
+          else
+            content = content.sub(/\A/, "#{insertion}")
+          end
+        end
+        File.write(path, content)
+      end
+
+      def remove_legacy_paths(content, name)
+        unless content.match?(/legacy_paths:\s*\{/m)
+          raise Thor::Error, "cannot remove legacy_paths in engines/#{name}/config/module.rb"
+        end
+
+        content = content.sub(/\n[ \t]*legacy_paths:\s*\{.*?\}[ \t]*,?[ \t]*(?:#[^\n]*)?/m, "")
+        content = content.sub(/legacy_paths:\s*\{.*?\}\s*,?\s*/m, "")
+        if content.match?(/legacy_paths:/)
+          raise Thor::Error, "cannot remove legacy_paths in engines/#{name}/config/module.rb"
+        end
+
+        content
+      end
+
+      def add_legacy_redirect_spec
+        spec_path = root.join("spec/requests", @target, "#{plural}_legacy_redirect_spec.rb")
+        FileUtils.mkdir_p(spec_path.dirname)
+        content = <<~RUBY
+          # frozen_string_literal: true
+
+          require "rails_helper"
+
+          RSpec.describe "#{@target}/#{plural} legacy redirect", type: :request do
+            it "redirects the old URL to the moved resource with a 301" do
+              get "/\#{I18n.default_locale}/#{source_route_segment}/#{plural}"
+              expect(response).to have_http_status(:moved_permanently)
+              expect(response).to redirect_to("/\#{I18n.default_locale}/#{target_route_segment}/#{plural}")
+            end
+          end
+        RUBY
+        File.write(spec_path, content) unless spec_path.exist?
+      end
+
+      def post_write
+        Rafelo::Generators::GrantCatalog.sync(root)
+        run_post_write(root: root, formatter_files: formatted_files)
+      end
+
+      def formatted_files
+        files = Dir[root.join("engines", @target, "app/frontend/**/*.{ts,tsx,mts,json}")]
+          .concat(Dir[root.join("engines", @source, "app/frontend/**/*.{ts,tsx,mts,json}")])
+          .select { |p| File.file?(p) }
+          .map(&:to_s)
+          .reject { |p| p.end_with?(".generated.ts") || p.end_with?(".generated.tsx") || p.include?("/app/frontend/locales/") }
+        files.uniq
+      end
+
+      def tree_files
+        Dir.glob(root.join("**/*"), File::FNM_DOTMATCH).select { |p| File.file?(p) }
+      end
+
+      def snapshot
+        tree_files.to_h { |p| [ p, File.binread(p) ] }
+      end
+
+      def restore_snapshot(before)
+        after = tree_files
+        (after - before.keys).each { |p| FileUtils.rm_f(p) }
+        before.each do |p, content|
+          FileUtils.mkdir_p(File.dirname(p))
+          File.binwrite(p, content) unless File.file?(p) && File.binread(p) == content
+        end
+        Dir.glob(root.join("**/*"), File::FNM_DOTMATCH).select { |p| File.directory?(p) }.sort_by(&:length).reverse_each do |dir|
+          Dir.rmdir(dir) if (Dir.entries(dir) - %w[. ..]).empty?
+        rescue StandardError
+          nil
+        end
+      rescue StandardError
+        nil
+      end
+    end
+  end
+end

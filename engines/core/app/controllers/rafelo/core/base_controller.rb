@@ -1,0 +1,387 @@
+# frozen_string_literal: true
+
+module Rafelo
+  module Core
+    class BaseController < ActionController::Base
+      include Pundit::Authorization
+      include Throttling
+      include Rails.application.routes.mounted_helpers
+
+      rescue_from StandardError, with: :render_unexpected_error
+      rescue_from Pundit::NotAuthorizedError, Pundit::AuthorizationNotPerformedError, with: :deny_access
+      rescue_from ApplicationError, with: :render_application_error
+      rescue_from ActionController::InvalidAuthenticityToken, with: :render_csrf_error
+
+      # The one ordered list (BE-24). Every throttle in a subclass is
+      # prepended and runs before all of these (BE-12).
+      allow_browser versions: :modern, block: :render_unsupported_browser, unless: :browser_check_exempt?
+      before_action :set_response_headers
+      before_action :assign_request_context
+      around_action :with_locale
+      before_action :underscore_param_keys
+      before_action :load_session
+      before_action :require_module_enabled
+      before_action :refresh_stale_grants
+      before_action :require_viewer
+      after_action :verify_authorized
+
+      def render_page(component, props:, status: nil)
+        page = props.respond_to?(:to_inertia) ? props.to_inertia : props
+        validate_page_keys!(page)
+        shared = shared_props
+        request.env["rafelo.page"] = component.to_s
+        request.env["rafelo.props_bytes"] = shared.merge(page).to_json.bytesize
+        request.env["rafelo.page_props"] = props if props.respond_to?(:to_inertia)
+        request.env["rafelo.urls_built"] = page_context.urls.built
+        render inertia: component, props: shared.merge(page), status: status
+      end
+
+      # Used by throttle handlers that run before the base callbacks. The
+      # locale comes from the path, not from the around action.
+      def render_unsupported_browser
+        response.headers["Cache-Control"] = "no-store"
+        render template: "rafelo/core/unsupported_browser", layout: false, status: :not_acceptable
+      end
+
+      def render_error(code)
+        share_trace
+        I18n.with_locale(params[:locale] || Locales.default) do
+          render_application_error(ApplicationError.new(code))
+        end
+      end
+
+      # Every write ends in a 303: success, shape failure, upstream 422 or a
+      # conflict. Only unexpected failures render the error page (BE-13).
+      def redirect_after_write(path, notice: nil, alert: nil, errors: nil)
+        AuditRecorder.record(
+          controller: self,
+          event: "write",
+          outcome: errors.present? ? "failure" : "success",
+          target: path
+        )
+        flash[:notice] = notice if notice
+        flash[:alert] = alert if alert
+        options = { status: :see_other }
+        options[:inertia] = { errors: errors } if errors.present?
+        redirect_to path, **options
+      end
+
+      def gateway(klass)
+        # BE-02: verify_authorized runs after the action, too late to protect
+        # the upstream. Refuse before building a client or making a call.
+        unless pundit_policy_authorized?
+          raise Pundit::NotAuthorizedError, "authorize before calling gateway(#{klass.name})"
+        end
+
+        budget = Current.call_budget ||= CallBudget.default
+        budget.deadline ||= request_deadline
+
+        klass.new(
+          token_provider: Current.token_provider,
+          budget: budget,
+          request_id: Current.request_id,
+          trace_id: Current.trace_id,
+          trace_sampled: Current.trace_sampled,
+          session: Current.session
+        )
+      end
+
+      # One monotonic deadline per request. Gateway clients, the token refresh,
+      # and a loser's wait all read it (BE-16, SEC-03).
+      def request_deadline
+        @request_deadline ||= RequestDeadline.new(
+          Rails.application.config.x.requests.upstream_deadline_seconds
+        )
+      end
+
+      def shared_props
+        SharedProps.new(context: page_context, request_path: request.path).to_h
+      end
+
+      def session_cookie_name
+        return "session_token" unless Rails.env.production?
+
+        "__Host-#{Rails.application.class.module_parent_name.underscore}_session_token"
+      end
+
+      def load_session
+        token = cookies[session_cookie_name]
+        return unless token
+
+        session = Session.find_by_token(token)
+        if session.nil? || !session.expires_at.future?
+          forget_session!(session)
+          return
+        end
+        if session.last_seen_at && session.last_seen_at < Rails.application.config.x.sessions.idle_timeout_seconds.seconds.ago
+          forget_session!(session)
+          return
+        end
+        session.touch_seen! if session.last_seen_at.nil? || session.last_seen_at < Rails.application.config.x.sessions.touch_interval_seconds.seconds.ago
+
+        Current.session = session
+        Current.viewer = Viewer.new(id: session.viewer_id, name: session.viewer_name.to_s)
+        Current.permissions = PermissionSet.new(session.permission_grants)
+        Current.token_provider = viewer_token_provider(session)
+        request.env["rafelo.viewer_id"] = session.viewer_id.to_s
+        request.env["rafelo.session_id"] = session.id
+        request.env["rafelo.log.viewer"] = LogPayload.opaque_viewer(session.viewer_id)
+      end
+
+      def refresh_stale_grants
+        return unless Current.session
+
+        refresh_session!
+      end
+
+      def viewer_token_provider(session)
+        ViewerTokenProvider.new(
+          session,
+          request_id: request.request_id,
+          trace_id: Current.trace_id,
+          trace_sampled: Current.trace_sampled,
+          budget: -> { Current.call_budget ||= CallBudget.default(deadline: request_deadline) },
+          deadline: request_deadline,
+          on_refresh: lambda do |refreshed|
+            Current.permissions = refreshed.permission_set if Current.session&.id == refreshed.id
+          end
+        )
+      end
+
+      def refresh_session!
+        budget = Current.call_budget ||= CallBudget.default
+        budget.deadline ||= request_deadline
+        gateway = AuthGateway.new(
+          budget: budget,
+          request_id: request.request_id,
+          trace_id: Current.trace_id,
+          trace_sampled: Current.trace_sampled
+        )
+        SessionRefresher.new(
+          session: Current.session,
+          gateway: gateway,
+          timeout: Rails.application.config.x.sessions.refresh_timeout_seconds,
+          wait: Rails.application.config.x.sessions.refresh_timeout_seconds + 2,
+          deadline: request_deadline
+        ).call
+        Current.token_provider = viewer_token_provider(Current.session.reload)
+        Current.permissions = Current.session.permission_set
+      rescue ApplicationError => error
+        raise if error.code == "auth.expired"
+
+        Rails.logger.warn("session refresh deferred: #{error.code}")
+      rescue ActiveRecord::RecordNotFound
+        raise ApplicationError.new("auth.expired")
+      end
+
+      def forget_session!(session)
+        session&.destroy
+        delete_session_cookie!
+      end
+
+      def clear_session!
+        Current.session&.destroy
+        Current.session = nil
+        request.env["rafelo.viewer_id"] = nil
+        request.env["rafelo.session_id"] = nil
+        Current.viewer = nil
+        Current.permissions = nil
+        Current.token_provider = nil
+        reset_session
+        delete_session_cookie!
+      end
+
+      def delete_session_cookie!
+        cookies.delete(session_cookie_name, secure: !Rails.env.local?, path: "/")
+      end
+
+      def require_module_enabled
+        entry = Modules.for_path(request.original_fullpath)
+        return unless entry&.flag && !Flags.enabled?(entry.flag)
+
+        raise ActionController::RoutingError, "Not Found"
+      end
+
+      def browser_check_exempt?
+        request.path.start_with?("/core/")
+      end
+
+      def require_viewer
+        return if Current.viewer
+
+        fallback = "/#{I18n.locale}"
+        target = ReturnTo.from({ return_to: return_target }, locale: I18n.locale).to_s
+        sign_in = "#{fallback}/sign_in"
+        location = target == fallback ? sign_in : "#{sign_in}?return_to=#{ERB::Util.url_encode(target)}"
+
+        if json_request?
+          response.headers["Cache-Control"] = "no-store"
+          return render json: error_payload(ApplicationError.new("auth.expired")), status: :unauthorized
+        end
+
+        redirect_to location, status: request.get? || request.head? ? :found : :see_other
+      end
+
+      def page_context
+        @page_context ||= PageContextFactory.build(
+          session: Current.session,
+          trace_id: Current.trace_id,
+          flags: Flags.current,
+          locale: I18n.locale,
+          request_id: Current.request_id,
+          urls: Urls.new(locale: I18n.locale, router: self)
+        )
+      end
+
+      private
+
+      def share_trace
+        inertia_share trace: InertiaRails.always { shared_props_trace }
+      end
+
+      def shared_props_trace
+        SharedProps.new(context: page_context, request_path: request.path).trace
+      end
+
+      def validate_page_keys!(page)
+        keys = page.keys.map(&:to_sym)
+        return if keys.sort == PageProps::ENVELOPE_KEYS.sort
+
+        raise ArgumentError, "page props must be exactly #{PageProps::ENVELOPE_KEYS.inspect}: #{keys.inspect}"
+      end
+
+      def pundit_user
+        Rafelo::Core::BasePolicy::PolicyUser.new(viewer: Current.viewer, permissions: Current.permissions)
+      end
+
+      def deny_access(error = nil)
+        AuditRecorder.record(
+          controller: self,
+          event: "authorization",
+          outcome: "failure",
+          target: request.path,
+          policy: error.respond_to?(:policy) ? error.policy : nil,
+          page: request.path
+        )
+        render_application_error(ApplicationError.new("auth.forbidden"))
+      end
+
+      def render_csrf_error
+        share_trace
+        render_application_error(ApplicationError.new("request.csrf_failed"))
+      end
+
+      def render_unexpected_error(error)
+        AuditRecorder.record(controller: self, event: "write", outcome: "failure", target: request.path) unless request.get? || request.head?
+        ErrorReporter.report(error, handled: false)
+        request.env["rafelo.error_reported"] = true
+        raise error
+      end
+
+      def json_request?
+        request.headers["X-Inertia"] != "true" && request.format.json?
+      end
+
+      # SEC-04/SEC-11: the current path for a GET, the page the form came from
+      # for a write. ReturnTo rejects anything outside the locale or hostile.
+      def return_target
+        configured = ReturnTo.from(params, locale: I18n.locale).to_s
+        return configured unless configured == "/#{I18n.locale}"
+        return request.fullpath if request.get? || request.head?
+
+        referer_path
+      end
+
+      # SEC-04: a write returns to the form page only when the referer is the
+      # same origin; ReturnTo checks the path and query that remain.
+      def referer_path
+        uri = URI.parse(request.referer.to_s)
+        return "/#{I18n.locale}" unless uri.host == request.host && uri.port == request.port
+
+        uri.request_uri
+      rescue URI::InvalidURIError
+        "/#{I18n.locale}"
+      end
+
+      def render_application_error(error)        ErrorReporter.report(error, handled: true)
+        if error.code == "auth.expired"
+          AuditRecorder.record(
+            controller: self,
+            event: "session_revoked",
+            outcome: "failure",
+            target: request.path
+          )
+        elsif error.code == "auth.forbidden"
+          AuditRecorder.record(
+            controller: self,
+            event: "authorization",
+            outcome: "failure",
+            target: request.path,
+            page: request.path
+          )
+        elsif !request.get? && !request.head?
+          AuditRecorder.record(controller: self, event: "write", outcome: "failure", target: request.path)
+        end
+
+        if error.code == "auth.expired" && Current.session
+          target = ReturnTo.from({ return_to: return_target }, locale: I18n.locale).to_s
+          clear_session!
+          if json_request?
+            response.headers["Cache-Control"] = "no-store"
+            return render json: error_payload(error), status: :unauthorized
+          end
+
+          return redirect_to "/#{I18n.locale}/sign_in?return_to=#{ERB::Util.url_encode(target)}",
+                             status: :see_other, inertia: { clear_history: true }
+        end
+
+        response.headers["Cache-Control"] = "no-store"
+        if performed?
+          response.status = error.status
+          response.set_header("Content-Type", "application/json")
+          response.body = error_payload(error).to_json
+        elsif request.headers["X-Inertia"] == "true" || request.format.html?
+          render_page "errors/show",
+                      props: ErrorShowProps.new(context: page_context, error: error),
+                      status: error.status
+        else
+          render json: error_payload(error), status: error.status
+        end
+      end
+
+      def error_payload(error)
+        {
+          error: {
+            code: error.code,
+            message: error.message,
+            requestId: Current.request_id.to_s,
+            traceId: (Current.trace_id.to_s.presence || Current.request_id.to_s),
+            retryable: error.retryable?
+          }
+        }
+      end
+
+      def set_response_headers
+        response.headers["Cache-Control"] = "no-store"
+      end
+
+      def assign_request_context
+        Current.request_id = request.request_id
+        Current.trace_id = request.env["rafelo.trace_id"].presence || request.request_id
+        Current.trace_sampled = request.env["rafelo.trace_sampled"] == true
+        share_trace
+      end
+
+      def with_locale(&block)
+        I18n.with_locale(params[:locale] || Locales.default) do
+          request.env["rafelo.locale"] = I18n.locale.to_s
+          block.call
+        end
+      end
+
+      def underscore_param_keys
+        params.deep_transform_keys!(&:underscore)
+      end
+    end
+  end
+end

@@ -1,0 +1,179 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "optparse"
+require "yaml"
+
+root = Dir.pwd
+OptionParser.new do |parser|
+  parser.banner = "Usage: script/ci/workflow_policy [--root DIR]"
+  parser.on("--root DIR") { |value| root = value }
+end.parse!
+
+root = File.expand_path(root)
+abort "workflow_policy: root does not exist: #{root}" unless Dir.exist?(root)
+
+files = Dir[File.join(root, ".github", "workflows", "*.{yml,yaml}")]
+abort "workflow_policy: no workflow files found" if files.empty?
+
+KNOWN_SCOPES = %w[
+  actions attestations checks contents deployments discussions id-token issues models
+  packages pages pull-requests repository-projects security-events statuses
+].freeze
+WRITE_ALLOW_LIST = {
+  "issue-check" => %w[issues],
+  "pr-check" => %w[pull-requests issues],
+  "release" => %w[contents issues],
+  "ratchet_update" => %w[contents pull-requests],
+  "audits" => %w[issues],
+  "repo_rules" => %w[issues],
+  "devcontainer" => %w[packages],
+  "touch-rate" => %w[issues]
+}.freeze
+PRIVILEGED_TRIGGERS = %w[pull_request_target workflow_run].freeze
+# WF-07: the only `if:` allowed to check out a workflow_run head. Compared
+# after whitespace normalisation, so an extra disjunct (`|| true`) fails.
+GUARDED_RELEASE_IF = "github.event.workflow_run.conclusion == 'success' && " \
+                     "github.event.workflow_run.event == 'push' && " \
+                     "github.event.workflow_run.head_repository.full_name == github.repository"
+
+def trigger_names(on_config)
+  case on_config
+  when String
+    [ on_config ]
+  when Array
+    on_config.map(&:to_s)
+  when Hash
+    on_config.keys.map(&:to_s)
+  else
+    []
+  end
+end
+
+errors = []
+jobs_checked = 0
+files.each do |path|
+  relative = path.delete_prefix("#{root}/")
+  raw = File.read(path)
+  data = YAML.load_file(path, aliases: true)
+  jobs = data["jobs"] || {}
+  errors << "#{relative}: has no jobs" if jobs.empty?
+
+  permissions = data["permissions"]
+  unless permissions == { "contents" => "read" }
+    errors << "#{relative}: top-level permissions must be exactly contents: read"
+  end
+
+  triggers = trigger_names(data["on"] || data[true])
+  privileged = triggers.any? { |trigger| PRIVILEGED_TRIGGERS.include?(trigger) }
+
+  jobs.each do |name, job|
+    next unless job.is_a?(Hash)
+
+    jobs_checked += 1
+    if job["steps"]
+      timeout = job["timeout-minutes"]
+      errors << "#{relative}: job #{name} has no timeout-minutes" unless timeout.is_a?(Integer) && timeout.positive?
+    end
+
+    job_permissions = job["permissions"]
+    if job_permissions
+      unless job_permissions.is_a?(Hash)
+        errors << "#{relative}: job #{name} permissions must be a mapping"
+      else
+        job_permissions.each do |scope, value|
+          errors << "#{relative}: job #{name} has unknown permission scope #{scope}" unless KNOWN_SCOPES.include?(scope)
+          errors << "#{relative}: job #{name} has unsupported permission #{scope}: #{value}" unless %w[read write none].include?(value)
+          next unless value == "write"
+
+          allowed = WRITE_ALLOW_LIST.fetch(name.to_s, [])
+          errors << "#{relative}: job #{name} has write permission outside the allow-list: #{scope}" unless allowed.include?(scope)
+        end
+      end
+    end
+
+    next unless privileged
+
+    job_if = job["if"].to_s
+    guarded_release = job_if.gsub(/\s+/, "") == GUARDED_RELEASE_IF.gsub(/\s+/, "")
+
+    if job["uses"]
+      reusable = job["uses"].to_s
+      unless reusable.start_with?("./") || reusable.match?(/@[0-9a-f]{40}\z/)
+        errors << "#{relative}: job #{name} calls a reusable workflow without a full commit SHA in a privileged workflow"
+      end
+    end
+
+    next unless job["steps"].is_a?(Array)
+
+    job["steps"].each do |step|
+      next unless step.is_a?(Hash)
+
+      uses = step["uses"].to_s
+      if uses.start_with?("actions/checkout")
+        ref = step.dig("with", "ref").to_s
+        repository = step.dig("with", "repository").to_s
+        allowed_release_ref = guarded_release && ref.include?("github.event.workflow_run.head_sha")
+        unless ref.empty? || allowed_release_ref
+          errors << "#{relative}: job #{name} checks out a pull request ref in a privileged workflow"
+          unless guarded_release
+            errors << "#{relative}: job #{name} has a release checkout but its if: is not exactly the guarded release condition"
+          end
+        end
+        errors << "#{relative}: job #{name} checks out another repository in a privileged workflow" unless repository.empty?
+      end
+
+      run = step["run"].to_s
+      if run.match?(/gh pr checkout|refs\/pull\/|pull\/\d+/)
+        errors << "#{relative}: job #{name} fetches pull request code in a privileged workflow"
+      end
+      if !guarded_release && run.match?(/\bpull_request\.head\b|\bhead_ref\b|\bworkflow_run\.head_sha\b|\bhead_sha\b/)
+        errors << "#{relative}: job #{name} fetches a pull request head in a privileged workflow"
+      end
+    end
+  end
+
+  if File.basename(path) == "ci.yml"
+    aggregator = jobs["ci-ok"]
+    if aggregator
+      needs = Array(aggregator["needs"]).map(&:to_s)
+      expected = jobs.keys.map(&:to_s) - [ "ci-ok" ]
+      missing = expected - needs
+      errors << "#{relative}: ci-ok needs is missing #{missing.join(', ')}" if missing.any?
+    else
+      errors << "#{relative}: no ci-ok aggregator"
+    end
+
+    adoption_jobs = %w[adoption adoption-needed adoption-update]
+    if (jobs.keys.map(&:to_s) & adoption_jobs).any?
+      decision = jobs["adoption-needed"]
+      if decision.nil?
+        errors << "#{relative}: no adoption-needed job"
+      elsif !decision["outputs"].is_a?(Hash) || !decision["outputs"].key?("current") || !decision["outputs"].key?("update")
+        errors << "#{relative}: adoption-needed must output current and update"
+      end
+
+      {
+        "adoption" => "current",
+        "adoption-update" => "update"
+      }.each do |job_name, output|
+        job = jobs[job_name]
+        if job.nil?
+          errors << "#{relative}: no #{job_name} job"
+          next
+        end
+
+        expected = "needs.adoption-needed.outputs.#{output} == 'true'"
+        errors << "#{relative}: #{job_name} must run only when #{expected}" unless job["if"].to_s.include?(expected)
+      end
+    end
+  end
+end
+
+if errors.any?
+  errors.each { |error| warn "workflow_policy: #{error}" }
+  warn "workflow_policy: checked #{files.length} workflows and #{jobs_checked} jobs; errors=#{errors.length}"
+  exit 1
+end
+
+warn "workflow_policy: checked #{files.length} workflows and #{jobs_checked} jobs; errors=0"

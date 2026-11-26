@@ -1,0 +1,83 @@
+require "rails_helper"
+
+RSpec.describe Rafelo::Core::LogPayload do
+  let(:trace_id) { "a" * 32 }
+
+  def request_for(path)
+    ActionDispatch::Request.new(Rack::MockRequest.env_for(path))
+  end
+
+  it "uses an HMAC viewer id that is neither the raw id nor its bare SHA-256" do
+    opaque = described_class.opaque_viewer("7")
+
+    expect(opaque).to match(/\A[0-9a-f]{16}\z/)
+    expect(opaque).not_to eq("7")
+    expect(opaque).not_to eq(Digest::SHA256.hexdigest("7"))
+    expect(described_class.opaque_viewer("7")).to eq(opaque)
+    expect(described_class.opaque_viewer("8")).not_to eq(opaque)
+  end
+
+  it "redacts a signed export path" do
+    request = request_for("/core/exports/eyJhbGciOiJIUzI1NiJ9.secret")
+    payload = described_class.new(
+      data: { method: "GET", path: "/core/exports/eyJhbGciOiJIUzI1NiJ9.secret", controller: "Rafelo::Core::ExportFilesController", action: "show", status: 302 },
+      event_payload: { request: request }
+    ).to_h
+
+    expect(payload[:path]).to eq("/core/exports/[REDACTED]")
+    expect(payload.to_json).not_to include("eyJhbGciOiJIUzI1NiJ9")
+  end
+
+  it "redacts the export segment under a script name, a double slash and any case" do
+    script = request_for("/core/exports/eyJhbGciOiJIUzI1NiJ9.secret")
+    script.env["SCRIPT_NAME"] = "/app"
+
+    double = request_for("/")
+    double.env["SCRIPT_NAME"] = ""
+    double.env["PATH_INFO"] = "//core/exports/eyJhbGciOiJIUzI1NiJ9.secret"
+
+    paths = {
+      script => "/app/core/exports/[REDACTED]",
+      double => "//core/exports/[REDACTED]",
+      request_for("/CORE/EXPORTS/eyJhbGciOiJIUzI1NiJ9.secret") => "/core/exports/[REDACTED]"
+    }
+
+    paths.each do |request, expected|
+      payload = described_class.new(
+        data: { method: "GET", path: request.path, controller: "Rafelo::Core::ExportFilesController", action: "show", status: 302 },
+        event_payload: { request: request }
+      ).to_h
+
+      expect(payload[:path]).to eq(expected)
+      expect(payload.to_json).not_to include("eyJhbGciOiJIUzI1NiJ9")
+    end
+  end
+
+  it "builds exactly the allow-listed keys" do
+    request = request_for("/en?token=secret#fragment")
+    collector = Rafelo::Core::RequestLog.new
+    collector.record_sql({ name: "Session Load" })
+    collector.record_upstream({ name: :api }, 4.5)
+    env = request.env
+    env["rafelo.request_id"] = "request-1"
+    env["rafelo.trace_id"] = trace_id
+    env["rafelo.request_log"] = collector
+    env["rafelo.page"] = "home/index"
+    env["rafelo.props_bytes"] = 123
+    env["rafelo.log.viewer"] = "viewer-hash"
+    env["rafelo.locale"] = "en"
+
+    payload = described_class.new(
+      data: { method: "GET", path: "/en", controller: "HomeController", action: "show", status: 200, duration: 12.3, db: 2.1 },
+      event_payload: { request: request }
+    ).to_h
+
+    expect(payload.keys.map(&:to_s)).to contain_exactly(*described_class::ALLOWED_KEYS)
+    expect(payload[:path]).to eq("/en")
+    expect(payload[:sql_count]).to eq(1)
+    expect(payload[:upstream_calls]).to eq("api" => 1)
+    expect(payload[:upstream_time]).to eq("api" => 4.5)
+    expect(payload[:viewer]).to eq("viewer-hash")
+    expect(payload.to_json).not_to include("secret")
+  end
+end

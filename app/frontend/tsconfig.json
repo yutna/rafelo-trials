@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": "../../tmp/tsc/app",
+    "tsBuildInfoFile": "../../tmp/tsc/app.tsbuildinfo"
+  },
+  "include": [
+    "**/*",
+    "**/*.json"
+  ],
+  "references": [
+    {
+      "path": "../../engines/core"
+    },
+    {
+      "path": "../../engines/design_system"
+    },
+    {
+      "path": "../../engines/example_customers"
+    },
+    {
+      "path": "../../engines/example_orders"
+    }
+  ]
+}

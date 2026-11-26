@@ -1,0 +1,201 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "fileutils"
+require "open3"
+require "tmpdir"
+require "yaml"
+
+root = File.expand_path("../..", __dir__)
+script = File.join(root, "script", "ci", "workflow_policy")
+failures = 0
+cases = 0
+
+def run(script, root)
+  Open3.capture2e(script, "--root", root)
+end
+
+Dir.mktmpdir("rafelo-workflow-canary-") do |dir|
+  workflows = File.join(dir, ".github", "workflows")
+  FileUtils.mkdir_p(workflows)
+  Dir[File.join(root, ".github", "workflows", "*.yml")].each do |path|
+    FileUtils.cp(path, workflows)
+  end
+
+  cases += 1
+  output, status = run(script, dir)
+  if !status.success?
+    failures += 1
+    warn "workflow_policy_canary: valid workflows: #{output}"
+  end
+
+  # WF-07: the guarded release if: is exact; an extra disjunct fails.
+  publish = File.join(workflows, "publish.yml")
+  guarded = <<~YAML
+    name: publish
+    on:
+      workflow_run:
+        workflows: [CI]
+        types: [completed]
+    permissions:
+      contents: read
+    jobs:
+      release:
+        if: >-
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_repository.full_name == github.repository
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        permissions:
+          contents: write
+        steps:
+          - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+            with:
+              ref: ${{ github.event.workflow_run.head_sha }}
+  YAML
+  File.write(publish, guarded)
+
+  cases += 1
+  output, status = run(script, dir)
+  unless status.success?
+    failures += 1
+    warn "workflow_policy_canary: exact guarded release: #{output}"
+  end
+
+  File.write(publish, guarded.sub("github.repository\n", "github.repository || true\n"))
+  cases += 1
+  output, status = run(script, dir)
+  if status.success? || !output.include?("not exactly the guarded release condition")
+    failures += 1
+    warn "workflow_policy_canary: guarded release with || true: #{output}"
+  end
+  FileUtils.rm_f(publish)
+
+  # WF-07: a privileged job-level reusable workflow must be pinned to a SHA.
+  privileged = File.join(workflows, "privileged.yml")
+  pinned = "yutna/oss-kit/.github/workflows/pr-check.yml@11a95f398a14797d99cfdcb1ffef2c2c8ea355ba"
+  File.write(privileged, <<~YAML)
+    name: privileged
+    on:
+      pull_request_target:
+    permissions:
+      contents: read
+    jobs:
+      tagged:
+        uses: yutna/oss-kit/.github/workflows/pr-check.yml@main
+      pinned:
+        uses: #{pinned}
+  YAML
+
+  cases += 1
+  output, status = run(script, dir)
+  if status.success? || !output.include?("calls a reusable workflow without a full commit SHA")
+    failures += 1
+    warn "workflow_policy_canary: mutable reusable workflow: #{output}"
+  end
+
+  File.write(privileged, <<~YAML)
+    name: privileged
+    on:
+      pull_request_target:
+    permissions:
+      contents: read
+    jobs:
+      pinned:
+        uses: #{pinned}
+  YAML
+
+  cases += 1
+  output, status = run(script, dir)
+  unless status.success?
+    failures += 1
+    warn "workflow_policy_canary: pinned reusable workflow: #{output}"
+  end
+
+  # WF-07: a privileged run: must not fetch a pull request head.
+  File.write(privileged, <<~YAML)
+    name: privileged
+    on:
+      pull_request_target:
+    permissions:
+      contents: read
+    jobs:
+      fetch:
+        runs-on: ubuntu-latest
+        timeout-minutes: 1
+        steps:
+          - run: git fetch origin ${{ github.event.pull_request.head.sha }}
+  YAML
+
+  cases += 1
+  output, status = run(script, dir)
+  if status.success? || !output.include?("fetches a pull request head")
+    failures += 1
+    warn "workflow_policy_canary: privileged head fetch: #{output}"
+  end
+  FileUtils.rm_f(privileged)
+
+  # A job the aggregator does not need is a missing gate step.
+  ci = File.join(workflows, "ci.yml")
+  FileUtils.cp(File.join(root, ".github", "workflows", "ci.yml"), ci)
+  data = YAML.load_file(ci, aliases: true)
+  data["jobs"]["stray"] = {
+    "runs-on" => "ubuntu-latest",
+    "timeout-minutes" => 1,
+    "steps" => [ { "run" => "true" } ]
+  }
+  File.write(ci, YAML.dump(data))
+
+  cases += 1
+  output, status = run(script, dir)
+  if status.success? || !output.include?("ci-ok needs is missing stray")
+    failures += 1
+    warn "workflow_policy_canary: job missing from ci-ok: #{output}"
+  end
+
+  # The adoption proofs must follow the decision job, not run everywhere.
+  ci = File.join(workflows, "ci.yml")
+  FileUtils.cp(File.join(root, ".github", "workflows", "ci.yml"), ci)
+  data = YAML.load_file(ci, aliases: true)
+  if data["jobs"].key?("adoption") && data["jobs"].key?("adoption-needed") && data["jobs"].key?("adoption-update")
+    data["jobs"]["adoption"]["if"] = "true"
+    File.write(ci, YAML.dump(data))
+
+    cases += 1
+    output, status = run(script, dir)
+    if status.success? || !output.include?("adoption must run only when needs.adoption-needed.outputs.current == 'true'")
+      failures += 1
+      warn "workflow_policy_canary: adoption without its trigger: #{output}"
+    end
+
+    # The decision job must expose both outputs.
+    FileUtils.cp(File.join(root, ".github", "workflows", "ci.yml"), ci)
+    data = YAML.load_file(ci, aliases: true)
+    data["jobs"]["adoption-needed"]["outputs"].delete("update")
+    File.write(ci, YAML.dump(data))
+
+    cases += 1
+    output, status = run(script, dir)
+    if status.success? || !output.include?("adoption-needed must output current and update")
+      failures += 1
+      warn "workflow_policy_canary: adoption-needed outputs: #{output}"
+    end
+  end
+end
+
+Dir.mktmpdir("rafelo-workflow-empty-") do |dir|
+  cases += 1
+  output, status = run(script, dir)
+  if status.success? || !output.include?("no workflow files found")
+    failures += 1
+    warn "workflow_policy_canary: empty root: #{output}"
+  end
+end
+
+if failures.positive?
+  warn "workflow_policy_canary: checked #{cases} cases; failures=#{failures}"
+  exit 1
+end
+
+warn "workflow_policy_canary: checked #{cases} cases; failures=0"
