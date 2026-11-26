@@ -6,7 +6,7 @@ const invoiceSchema = z.object({
   id: z.string(),
   number: z.string(),
   customerName: z.string(),
-  status: z.enum(["draft", "issued", "paid", "void"]),
+  status: z.enum(["open", "draft", "issued", "paid", "cancelled", "void"]),
   total: moneySchema,
   issuedOn: z.string(),
 });
@@ -14,6 +14,7 @@ const invoiceSchema = z.object({
 export const pageSchema = definePage({
   data: z.object({
     items: z.array(invoiceSchema),
+    newHref: hrefSchema,
     previousHref: hrefSchema.nullable(),
     nextHref: hrefSchema.nullable(),
   }),
@@ -25,5 +26,5 @@ export const pageSchema = definePage({
     filters: z.record(z.string(), z.string()),
     cursor: z.string().nullable(),
   }),
-  can: ["invoice.read"] as const,
+  can: ["invoice.read", "invoice.create"] as const,
 });

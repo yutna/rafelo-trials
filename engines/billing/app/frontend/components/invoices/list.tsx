@@ -3,7 +3,7 @@ import { DataTable, EmptyState, formatDate, formatMoney, useLocale } from "@desi
 
 import type { InvoiceListRow } from "./list.types";
 
-const KNOWN_STATUSES = ["draft", "issued", "paid", "void"];
+const KNOWN_STATUSES = ["open", "draft", "issued", "paid", "cancelled", "void"];
 
 function statusLabel(t: (key: string) => string, status: string): string {
   if (!KNOWN_STATUSES.includes(status)) return status;
