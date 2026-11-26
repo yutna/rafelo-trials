@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 
 // A fixed viewport keeps the two screenshots independent of font-metric
 // rounding in the bottom whitespace; the catalog still fits in one frame.
-const CATALOG_VIEWPORT = { width: 1280, height: 1750 };
+const CATALOG_VIEWPORT = { width: 1280, height: 1800 };
 test.use({ viewport: CATALOG_VIEWPORT });
 
 async function expectCatalogFits(page: import("@playwright/test").Page) {
@@ -33,6 +33,9 @@ test("catalog screenshot matches its committed baseline", async ({ page }) => {
   await expect(page.getByTestId("catalog-button")).toBeVisible();
   await expect(page.getByTestId("catalog-chart")).toBeVisible();
   await expect(page.getByTestId("catalog-empty")).toBeVisible();
+  await expect(page.getByTestId("catalog.status.neutral")).toBeVisible();
+  await expect(page.getByTestId("catalog.status.success")).toBeVisible();
+  await expect(page.getByTestId("catalog.status.warning")).toBeVisible();
   await expectCatalogFits(page);
   await expect(page).toHaveScreenshot("catalog.png", { fullPage: false, animations: "disabled" });
 });
@@ -46,6 +49,9 @@ test("Thai catalog shows the Buddhist calendar", async ({ page }) => {
   await expect(chart).toHaveAttribute("aria-label", "แผนภูมิตัวอย่าง");
   await expect(chart).not.toHaveAttribute("aria-hidden");
   await expect(page.getByTestId("catalog-empty")).toBeVisible();
+  await expect(page.getByTestId("catalog.status.neutral")).toBeVisible();
+  await expect(page.getByTestId("catalog.status.success")).toBeVisible();
+  await expect(page.getByTestId("catalog.status.warning")).toBeVisible();
   await expectCatalogFits(page);
   await expect(page).toHaveScreenshot("catalog-th.png", {
     fullPage: false,
